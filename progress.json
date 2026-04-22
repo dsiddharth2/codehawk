@@ -51,36 +51,36 @@
       "id": 6,
       "step": "Write vcs.py CLI",
       "type": "work",
-      "status": "pending",
+      "status": "completed",
       "tier": "standard",
-      "commit": "",
-      "notes": ""
+      "commit": "8cb58e0",
+      "notes": "Created src/vcs.py with argparse CLI and 6 subcommands: get-pr, list-threads, post-comment, resolve-thread, get-file, post-summary. All wrap corresponding activities. JSON to stdout, errors to stderr. Auth from env via Settings."
     },
     {
       "id": 7,
       "step": "Write findings-schema.json + post_findings.py",
       "type": "work",
-      "status": "pending",
+      "status": "completed",
       "tier": "premium",
-      "commit": "",
-      "notes": ""
+      "commit": "db406b3",
+      "notes": "Created commands/findings-schema.json (JSON Schema draft-07 matching FindingsFile). Created src/post_findings.py (~380 lines): validates schema, filters <0.7 confidence, caps 30/5-per-file by severity, fetches existing cr-ids, deduplicates, scores with mode multipliers, posts comments (ADO activity, GitHub gh api), handles fix_verifications, reads .codereview.yml gate thresholds, posts summary, outputs structured JSON. --dry-run skips VCS writes. Logging redirected to stderr for clean JSON stdout."
     },
     {
       "id": 8,
       "step": "Unit tests for Phase 2",
       "type": "work",
-      "status": "pending",
+      "status": "completed",
       "tier": "standard",
-      "commit": "",
-      "notes": ""
+      "commit": "b1fff7d",
+      "notes": "Created tests/conftest.py (shared fixtures), tests/test_pr_scorer.py (18 tests: 0 findings=5 stars, security critical=5.0, mode multipliers), tests/test_post_findings.py (24 tests: confidence filter, cap, cr-id dedup, .codereview.yml thresholds, dry-run E2E), tests/test_vcs_cli.py (24 tests: subcommand parsing, activity invocation). All 66 tests passing."
     },
     {
       "id": 9,
       "step": "VERIFY: Phase 2 — VCS CLI + Post Findings",
       "type": "verify",
-      "status": "pending",
+      "status": "completed",
       "commit": "",
-      "notes": ""
+      "notes": "pytest: 66 passed, 0 failed. vcs.py --help: all 6 subcommands shown. post_findings.py --dry-run with tests/fixtures/sample_findings.json: valid JSON output, confidence filter drops cr-006 (0.60), security mode elevates cr-002 warning→critical, gate fails as expected. Pushed to origin."
     },
     {
       "id": 10,
