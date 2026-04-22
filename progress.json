@@ -43,9 +43,9 @@
       "id": 5,
       "step": "VERIFY: Phase 1 — Scaffold + Port Foundation",
       "type": "verify",
-      "status": "pending",
+      "status": "completed",
       "commit": "",
-      "notes": ""
+      "notes": "pytest: no tests yet (0 collected, exit 5 — expected at Phase 1 stage). All imports resolve with PYTHONPATH=src. Config strips OpenAI, VCS+GH_TOKEN present. cr-id extraction and injection verified. Mode multipliers verified (security/performance warning->critical, migration all->critical). Pushed to origin."
     },
     {
       "id": 6,
