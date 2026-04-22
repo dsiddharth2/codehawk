@@ -1,0 +1,56 @@
+# codehawk — ADO PR Review Pipeline
+# Trigger: pull request to any branch. Requires self-hosted agent with Docker.
+
+trigger: none
+
+pr:
+  branches:
+    include:
+      - "*"
+
+variables:
+  CODEHAWK_IMAGE: "codehawk:latest"
+  AGENT: "codex"
+
+pool:
+  vmImage: "ubuntu-latest"
+
+steps:
+  - checkout: self
+    fetchDepth: 0
+    clean: true
+
+  - task: Docker@2
+    displayName: "Pull codehawk image"
+    inputs:
+      command: pull
+      arguments: "$(CODEHAWK_IMAGE)"
+
+  - task: AzureCLI@2
+    displayName: "Run codehawk review"
+    inputs:
+      azureSubscription: "$(AZURE_SUBSCRIPTION)"
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        docker run --rm \
+          -e PR_ID="$(System.PullRequest.PullRequestId)" \
+          -e REPO="$(Build.Repository.Name)" \
+          -e VCS="ado" \
+          -e AGENT="$(AGENT)" \
+          -e ADO_TOKEN="$(ADO_TOKEN)" \
+          -e ADO_ORGANIZATION="$(ADO_ORGANIZATION)" \
+          -e ADO_PROJECT="$(ADO_PROJECT)" \
+          -v "$(Build.SourcesDirectory):/workspace" \
+          "$(CODEHAWK_IMAGE)"
+    env:
+      ADO_TOKEN: $(ADO_TOKEN)
+      ADO_ORGANIZATION: $(ADO_ORGANIZATION)
+      ADO_PROJECT: $(ADO_PROJECT)
+
+  - task: PublishBuildArtifacts@1
+    displayName: "Publish review artifacts"
+    condition: always()
+    inputs:
+      pathToPublish: "$(Build.SourcesDirectory)/.cr"
+      artifactName: "codehawk-review"

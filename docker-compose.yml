@@ -1,0 +1,47 @@
+version: "3.9"
+
+# Local development docker-compose for codehawk
+# Usage:
+#   VCS=ado PR_ID=123 REPO=MyRepo AGENT=codex docker compose run --rm codehawk
+#   DRY_RUN=1 VCS=github PR_ID=456 REPO=owner/repo AGENT=claude docker compose run --rm codehawk
+
+services:
+  codehawk:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: codehawk:local
+    environment:
+      # Required
+      - PR_ID=${PR_ID}
+      - REPO=${REPO}
+      - VCS=${VCS:-ado}
+      - AGENT=${AGENT:-codex}
+
+      # ADO auth (required for VCS=ado)
+      - ADO_PAT=${ADO_PAT:-}
+      - ADO_ORG=${ADO_ORG:-}
+      - ADO_PROJECT=${ADO_PROJECT:-}
+
+      # GitHub auth (required for VCS=github)
+      - GH_TOKEN=${GH_TOKEN:-}
+
+      # Agent API keys
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+
+      # Optional overrides
+      - CODEX_MODEL=${CODEX_MODEL:-o3}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-opus-4-7}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-pro}
+      - DRY_RUN=${DRY_RUN:-}
+
+    volumes:
+      # Mount the repo under review at /workspace
+      - ${WORKSPACE_PATH:-./}:/workspace:ro
+      # Write findings back to host for inspection
+      - ./findings-output:/workspace/.cr
+
+    # Override entrypoint for debug shell access
+    # Uncomment: entrypoint: ["/bin/bash"]

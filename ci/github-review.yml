@@ -1,0 +1,44 @@
+# codehawk — GitHub Actions PR Review Workflow
+name: codehawk PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  review:
+    name: Code Review
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run codehawk review
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          docker run --rm \
+            -e PR_ID="${{ github.event.pull_request.number }}" \
+            -e REPO="${{ github.repository }}" \
+            -e VCS="github" \
+            -e AGENT="codex" \
+            -e GH_TOKEN="${GH_TOKEN}" \
+            -e COMMIT_ID="${{ github.event.pull_request.head.sha }}" \
+            -e OPENAI_API_KEY="${OPENAI_API_KEY}" \
+            -v "${{ github.workspace }}:/workspace" \
+            codehawk:latest
+
+      - name: Upload review artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codehawk-review
+          path: .cr/
+          if-no-files-found: ignore

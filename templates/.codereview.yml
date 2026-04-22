@@ -1,0 +1,22 @@
+# codehawk gate thresholds
+# Copy this file to the root of your repository as .codereview.yml and customize.
+# The review agent reads this file in Step 1; post_findings.py applies the thresholds.
+
+# Minimum star rating required to pass CI (1–5).
+# 5 = no findings, 4 = minor suggestions only, 3 = warnings present, 2 = critical present, 1 = severe issues.
+min_star_rating: 3
+
+# Fail the build if any critical-severity finding is posted.
+# Set to false if you want star rating to be the only gate.
+fail_on_critical: true
+
+# Maximum findings to post (hard cap — independent of the agent's internal cap of 30).
+# Useful if you want even fewer comments on large PRs.
+# max_findings: 30
+
+# Per-file finding cap (agent caps at 5; you can lower this).
+# max_per_file: 5
+
+# Minimum confidence threshold for posting a finding (agent default: 0.7).
+# Raise to 0.8 or 0.85 to reduce noise in high-volume teams.
+# min_confidence: 0.7
