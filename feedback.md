@@ -172,7 +172,7 @@ All activities follow the same structural pattern. Naming conventions are consis
 **Impact:** Any PEP 517 build (`pip install -e .`, `pip wheel .`, `python -m build`) will fail. Blocks Phase 3 Docker build and Phase 11 local CLI.
 **Fix:** Change to `build-backend = "setuptools.build_meta"`.
 
-**Doer:** fixed in commit [pending] — changed `build-backend` from `setuptools.backends.legacy:build` to `setuptools.build_meta`
+**Doer:** fixed in commit 10190b5 — changed `build-backend` from `setuptools.backends.legacy:build` to `setuptools.build_meta`
 
 ### 9.2 Missing directories — FAIL
 
@@ -180,7 +180,7 @@ All activities follow the same structural pattern. Naming conventions are consis
 **Impact:** Phase 2 (Task 7) creates `commands/findings-schema.json` — that task will need to create the directory. Not a runtime blocker for Phase 1, but it means Task 1's "done when" criteria are not fully met.
 **Fix:** Add `.gitkeep` files to `commands/`, `templates/`, `ci/` so git tracks them, or create them now and accept they'll appear with the first file added. Either way, the scaffold promise should be honored.
 
-**Doer:** fixed in commit [pending] — created `.gitkeep` files in `commands/`, `templates/`, and `ci/` directories
+**Doer:** fixed in commit 10190b5 — created `.gitkeep` files in `commands/`, `templates/`, and `ci/` directories
 
 ---
 
