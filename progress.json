@@ -121,36 +121,36 @@
       "id": 14,
       "step": "Write review mode prompts",
       "type": "work",
-      "status": "pending",
+      "status": "completed",
       "tier": "standard",
-      "commit": "",
-      "notes": ""
+      "commit": "17574d5",
+      "notes": "Created commands/review-mode-standard.md (correctness, patterns, test coverage, naming, error handling, edge cases), review-mode-security.md (OWASP Top 10: injection, auth bypass, secrets, crypto, insecure defaults, CVEs — warning→critical multiplier), review-mode-migration.md (data loss, rollback safety, lock duration, idempotency, zero-downtime — all→critical), review-mode-docs-chore.md (doc accuracy, changelog, config correctness, formatting — light-touch, max 10 findings)."
     },
     {
       "id": 15,
       "step": "Mode auto-detection + multiplier wiring + templates",
       "type": "work",
-      "status": "pending",
+      "status": "completed",
       "tier": "standard",
-      "commit": "",
-      "notes": ""
+      "commit": "17574d5",
+      "notes": "Mode auto-detection for all 6 modes (migration, security, architecture, performance, docs_chore, standard) already present in review-pr-core.md Step 3 from Task 10. post_findings.py already reads review_modes from findings.json and passes to apply_mode_multipliers (verified in Phase 2). Created templates/.codereview.md (starter conventions with inline comments), templates/.codereview.yml (min_star_rating:3, fail_on_critical:true, commented optional fields), templates/dismissed.jsonl (empty). Also fix: entrypoint.sh now copies PROJECT-CLAUDE.md into /workspace when AGENT=claude (MEDIUM finding from Phase 3 review)."
     },
     {
       "id": 16,
       "step": "Intent marker handling",
       "type": "work",
-      "status": "pending",
+      "status": "completed",
       "tier": "cheap",
-      "commit": "",
-      "notes": ""
+      "commit": "17574d5",
+      "notes": "All three intent markers already documented in review-pr-core.md Step 5b from Task 10: # cr: intentional (skip line), # cr: ignore-next-line (skip next line), # cr: ignore-block start/end (skip block). Instructions state: 'If a potential finding falls within a marked region, do not include it in findings.json.' No changes needed."
     },
     {
       "id": 17,
       "step": "VERIFY: Phase 4 — Review Modes + Conventions",
       "type": "verify",
-      "status": "pending",
-      "commit": "",
-      "notes": ""
+      "status": "completed",
+      "commit": "17574d5",
+      "notes": "pytest: 66 passed, 0 failed. Mode files: all 4 exist (standard, security, migration, docs-chore). Templates: .codereview.md, .codereview.yml, dismissed.jsonl all present in templates/. Intent markers: all 3 types documented in Step 5b of review-pr-core.md. entrypoint.sh: PROJECT-CLAUDE.md copy added for AGENT=claude. Pushed to origin."
     },
     {
       "id": 18,
