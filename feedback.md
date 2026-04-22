@@ -114,6 +114,8 @@ Missing: `--commit-id "${COMMIT_ID:-}"` argument. The `post_findings.py` CLI acc
 
 **Fix:** Add `--commit-id "${COMMIT_ID:-}"` to the `post_findings.py` invocation in entrypoint.sh.
 
+**Doer:** fixed — added `--commit-id "${COMMIT_ID:-}"` argument to the `post_findings.py` invocation in `entrypoint.sh` between `--repo` and `${DRY_RUN_FLAG:-}`.
+
 ---
 
 ## 7. Non-Blocking Notes

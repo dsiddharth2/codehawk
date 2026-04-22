@@ -112,6 +112,7 @@ python3 /app/src/post_findings.py \
     --vcs "$VCS" \
     --pr "$PR_ID" \
     --repo "$REPO" \
+    --commit-id "${COMMIT_ID:-}" \
     ${DRY_RUN_FLAG:-}
 
 echo "==> codehawk complete."
