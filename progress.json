@@ -1,0 +1,199 @@
+{
+  "project": "codehawk",
+  "plan_file": "PLAN.md",
+  "created": "2026-04-22",
+  "tasks": [
+    {
+      "id": 1,
+      "step": "Project scaffold + pyproject.toml + utility modules",
+      "type": "work",
+      "status": "pending",
+      "tier": "cheap",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": 2,
+      "step": "Port models + config + activities",
+      "type": "work",
+      "status": "pending",
+      "tier": "standard",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": 3,
+      "step": "Port pr_scorer + score_comparison",
+      "type": "work",
+      "status": "pending",
+      "tier": "standard",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": 4,
+      "step": "VERIFY: Phase 1 — Scaffold + Port Foundation",
+      "type": "verify",
+      "status": "pending",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": 5,
+      "step": "Write vcs.py CLI",
+      "type": "work",
+      "status": "pending",
+      "tier": "standard",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": 6,
+      "step": "Write findings-schema.json + post_findings.py",
+      "type": "work",
+      "status": "pending",
+      "tier": "premium",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": 7,
+      "step": "Unit tests for Phase 2",
+      "type": "work",
+      "status": "pending",
+      "tier": "standard",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": 8,
+      "step": "VERIFY: Phase 2 — VCS CLI + Post Findings",
+      "type": "verify",
+      "status": "pending",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": 9,
+      "step": "Write review-pr-core.md + scoring.md",
+      "type": "work",
+      "status": "pending",
+      "tier": "premium",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": 10,
+      "step": "Dockerfile + entrypoint.sh + docker-compose",
+      "type": "work",
+      "status": "pending",
+      "tier": "standard",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": 11,
+      "step": "Project instructions + smoke test",
+      "type": "work",
+      "status": "pending",
+      "tier": "standard",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": 12,
+      "step": "VERIFY: Phase 3 — Core Prompt + Docker",
+      "type": "verify",
+      "status": "pending",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": 13,
+      "step": "Write review mode prompts",
+      "type": "work",
+      "status": "pending",
+      "tier": "standard",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": 14,
+      "step": "Mode auto-detection + multiplier wiring + templates",
+      "type": "work",
+      "status": "pending",
+      "tier": "standard",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": 15,
+      "step": "Intent marker handling",
+      "type": "work",
+      "status": "pending",
+      "tier": "cheap",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": 16,
+      "step": "VERIFY: Phase 4 — Review Modes + Conventions",
+      "type": "verify",
+      "status": "pending",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": 17,
+      "step": "Fix verification in prompt + post_findings",
+      "type": "work",
+      "status": "pending",
+      "tier": "standard",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": 18,
+      "step": "Delta-only review logic + re-push tests",
+      "type": "work",
+      "status": "pending",
+      "tier": "standard",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": 19,
+      "step": "VERIFY: Phase 5 — Fix Verification + Re-push",
+      "type": "verify",
+      "status": "pending",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": 20,
+      "step": "GitHub path in post_findings.py",
+      "type": "work",
+      "status": "pending",
+      "tier": "standard",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": 21,
+      "step": "CI pipelines + Claude skill wrapper",
+      "type": "work",
+      "status": "pending",
+      "tier": "cheap",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": 22,
+      "step": "VERIFY: Phase 6 — GitHub Integration",
+      "type": "verify",
+      "status": "pending",
+      "commit": "",
+      "notes": ""
+    }
+  ]
+}
