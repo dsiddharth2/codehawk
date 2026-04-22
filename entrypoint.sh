@@ -45,6 +45,10 @@ if [[ -f "/app/AGENTS.md" && ! -f "/workspace/AGENTS.md" ]]; then
     cp /app/AGENTS.md /workspace/AGENTS.md
 fi
 
+if [[ "$AGENT" == "claude" && -f "/app/PROJECT-CLAUDE.md" && ! -f "/workspace/PROJECT-CLAUDE.md" ]]; then
+    cp /app/PROJECT-CLAUDE.md /workspace/PROJECT-CLAUDE.md
+fi
+
 # --- Phase 1: Agent reviews the PR ------------------------------------------
 echo "==> Phase 1: Running agent ($AGENT)..."
 
