@@ -528,7 +528,6 @@ def run(
         settings = None
 
     scorer = PRScorer(penalty_matrix=penalty_matrix, star_thresholds=star_thresholds)
-    adjusted_for_scoring = scorer.apply_mode_multipliers(after_confidence, findings_file.review_modes)
 
     # 4. Cap findings
     capped = cap_findings(after_confidence, MAX_TOTAL_FINDINGS, MAX_PER_FILE)
@@ -550,7 +549,6 @@ def run(
     deduped_count = len(capped) - len(new_findings)
 
     # 7. Score (use mode-adjusted findings)
-    adjusted_capped = [f for f in adjusted_for_scoring if f.id in {nf.id for nf in new_findings}]
     all_adjusted = scorer.apply_mode_multipliers(capped, findings_file.review_modes)
     score = scorer.calculate_pr_score(all_adjusted)
 
