@@ -1,10 +1,10 @@
 # Code Reviewer v3.1 — Phase 6 (Final) Code Review
 
 **Reviewer:** local-codehawk-reviewer
-**Date:** 2026-04-22 20:15:00+05:30
-**Verdict:** CHANGES NEEDED
+**Date:** 2026-04-22 20:30:00+05:30
+**Verdict:** APPROVED
 
-> See the recent git history of this file to understand the context of this review. Phase 6 (Tasks 21–23) is the final phase of Sprint 1, delivering GitHub path completion in post_findings.py, CI pipeline configs, and the Claude skill wrapper. Phase 5 was approved in commit a58fb5d. This review covers commit b0a98af against the Phase 5 baseline. This is a cumulative review — all phases (1–6) are in scope.
+> See the recent git history of this file to understand the context of this review. Phase 6 (Tasks 21–23) is the final phase of Sprint 1, delivering GitHub path completion in post_findings.py, CI pipeline configs, and the Claude skill wrapper. Phase 5 was approved in commit a58fb5d. Initial review (commit 9ae78bf) found one must-fix item — Finding 6.1 (commit_id not passed to post_findings.py). The doer fixed it in commit a45bd78. This re-review verifies the fix and approves Sprint 1.
 
 ---
 
@@ -114,7 +114,9 @@ Missing: `--commit-id "${COMMIT_ID:-}"` argument. The `post_findings.py` CLI acc
 
 **Fix:** Add `--commit-id "${COMMIT_ID:-}"` to the `post_findings.py` invocation in entrypoint.sh.
 
-**Doer:** fixed — added `--commit-id "${COMMIT_ID:-}"` argument to the `post_findings.py` invocation in `entrypoint.sh` between `--repo` and `${DRY_RUN_FLAG:-}`.
+**Doer:** fixed in commit a45bd78 — added `--commit-id "${COMMIT_ID:-}"` argument to the `post_findings.py` invocation in `entrypoint.sh` between `--repo` and `${DRY_RUN_FLAG:-}`.
+
+**Re-review (2026-04-22 20:30+05:30):** Fix verified. `entrypoint.sh:115` now reads `--commit-id "${COMMIT_ID:-}" \`. The `${COMMIT_ID:-}` pattern correctly defaults to empty string when unset (ADO path doesn't need commit_id). GitHub Actions workflow sets `COMMIT_ID` from `github.event.pull_request.head.sha`, which flows through to `_post_inline_github`. 87 tests pass, no regressions. RESOLVED.
 
 ---
 
@@ -163,12 +165,10 @@ Requirements.md line 64 mentions "optionally minimize via GraphQL" for resolved 
 
 Phase 6 delivers solid GitHub integration: the retry wrapper is well-designed, all 5 subprocess calls are wrapped, 12 well-targeted tests cover the new surface area, CI pipelines are correct, and the Claude skill wrapper is clean.
 
-**One must-fix item blocks approval:**
-
-1. **Finding 6.1 (CRITICAL):** `entrypoint.sh` must pass `--commit-id "${COMMIT_ID:-}"` to `post_findings.py`. Without this, GitHub inline comments will fail with 422 errors in production.
+**Finding 6.1 (CRITICAL) — RESOLVED** in commit a45bd78. `entrypoint.sh` now passes `--commit-id "${COMMIT_ID:-}"` to `post_findings.py`.
 
 Two non-blocking notes for future sprints: GitHub API pagination (7.1) and GraphQL minimize (7.2).
 
-**Sprint 1 overall assessment:** All 23 tasks across 6 phases are complete. Code quality is consistently good — clean separation between ADO and GitHub paths, proper error handling, comprehensive tests (87 total), and well-structured prompt engineering. The codebase is ready for production use pending the commit_id fix.
+**Sprint 1 overall assessment:** All 23 tasks across 6 phases are complete. 87 tests pass with no regressions. Code quality is consistently good — clean separation between ADO and GitHub paths, proper error handling, comprehensive tests, and well-structured prompt engineering. The codebase is ready for production use.
 
-**Phase 6 verdict: CHANGES NEEDED.** Fix Finding 6.1, then request re-review.
+**Phase 6 verdict: APPROVED.** Sprint 1 is complete.
