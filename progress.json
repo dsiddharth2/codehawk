@@ -182,27 +182,27 @@
       "id": 21,
       "step": "GitHub path in post_findings.py",
       "type": "work",
-      "status": "pending",
+      "status": "completed",
       "tier": "standard",
       "commit": "",
-      "notes": ""
+      "notes": "Added _gh_run_with_retry() helper with exponential backoff on rate-limit errors (429, secondary rate, API rate). Replaced all subprocess.run calls in GitHub functions (_fetch_posted_cr_ids_github, _post_inline_github, _handle_fix_verifications_github, summary posting) with _gh_run_with_retry. Added TestGitHubPath class (12 tests): fetch cr-ids parsing, empty-on-error, multiple comments, dry-run skips subprocess, payload correctness, returns-false-on-error, retry-succeeds-on-first-attempt, retry-on-rate-limit, non-rate-limit-error-raised-immediately, exhausted-retries, GitHub E2E dry-run, fetch-called-when-not-dry-run. 87 total tests pass."
     },
     {
       "id": 22,
       "step": "CI pipelines + Claude skill wrapper",
       "type": "work",
-      "status": "pending",
+      "status": "completed",
       "tier": "cheap",
       "commit": "",
-      "notes": ""
+      "notes": "Created ci/azure-pipelines-pr-review.yml (~55 lines): PR trigger, Docker pull + run with ADO env vars, publish .cr/ as artifact. Created ci/github-review.yml (~40 lines): pull_request trigger, checkout, docker run with GH_TOKEN + COMMIT_ID, upload-artifact. Created commands/review-pr.claude.md (~10 lines): Claude skill wrapper loading review-pr-core.md with tool list and hard constraints. Both YAML files validated with yaml.safe_load. Wrapper references review-pr-core.md."
     },
     {
       "id": 23,
       "step": "VERIFY: Phase 6 — GitHub Integration",
       "type": "verify",
-      "status": "pending",
+      "status": "completed",
       "commit": "",
-      "notes": ""
+      "notes": "pytest: 87 passed, 0 failed (was 75, +12 GitHub path tests). GitHub path tests all pass (TestGitHubPath: 12 tests). CI YAML files: both valid (yaml.safe_load passes). Claude skill wrapper: commands/review-pr.claude.md references review-pr-core.md. Sprint 1 complete: all 23 tasks completed across Phases 1-6. Pushed to origin."
     }
   ]
 }

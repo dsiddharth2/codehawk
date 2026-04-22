@@ -481,3 +481,200 @@ class TestFixVerification:
         assert statuses["cr-001"] == "fixed"
         assert statuses["cr-002"] == "still_present"
         assert statuses["cr-003"] == "not_relevant"
+
+
+# ---------------------------------------------------------------------------
+# GitHub path — subprocess mock tests
+# ---------------------------------------------------------------------------
+
+class TestGitHubPath:
+    """Tests for GitHub-specific code paths in post_findings.py."""
+
+    def _make_completed_process(self, stdout="", returncode=0):
+        import subprocess as sp
+        mock = MagicMock()
+        mock.stdout = stdout
+        mock.returncode = returncode
+        return mock
+
+    # _fetch_posted_cr_ids_github
+
+    def test_fetch_cr_ids_parses_marker_from_comment(self):
+        body_with_marker = "Some comment text\n<!-- cr-id: cr-007 -->"
+        with patch("post_findings._gh_run_with_retry") as mock_run:
+            mock_run.return_value = self._make_completed_process(stdout=body_with_marker)
+            result = pf._fetch_posted_cr_ids_github(pr_id=99, repo="org/repo")
+        assert "cr-007" in result
+
+    def test_fetch_cr_ids_returns_empty_on_subprocess_error(self):
+        with patch("post_findings._gh_run_with_retry", side_effect=Exception("network error")):
+            result = pf._fetch_posted_cr_ids_github(pr_id=99, repo="org/repo")
+        assert result == set()
+
+    def test_fetch_cr_ids_multiple_comments(self):
+        stdout = "<!-- cr-id: cr-001 -->\n<!-- cr-id: cr-002 -->\nno marker here"
+        with patch("post_findings._gh_run_with_retry") as mock_run:
+            mock_run.return_value = self._make_completed_process(stdout=stdout)
+            result = pf._fetch_posted_cr_ids_github(pr_id=1, repo="org/repo")
+        assert result == {"cr-001", "cr-002"}
+
+    # _post_inline_github
+
+    def test_post_inline_github_dry_run_skips_subprocess(self):
+        finding = MagicMock()
+        finding.id = "cr-001"
+        finding.severity = "warning"
+        finding.category = "security"
+        finding.title = "Test"
+        finding.message = "msg"
+        finding.suggestion = None
+        finding.confidence = 0.9
+        finding.file = "app.py"
+        finding.line = 10
+        with patch("post_findings._gh_run_with_retry") as mock_run:
+            result = pf._post_inline_github(finding, pr_id=1, repo="org/repo", commit_id="abc", dry_run=True)
+        assert result is True
+        mock_run.assert_not_called()
+
+    def test_post_inline_github_sends_correct_payload(self):
+        finding = MagicMock()
+        finding.id = "cr-001"
+        finding.severity = "critical"
+        finding.category = "security"
+        finding.title = "SQL Injection"
+        finding.message = "Raw SQL concatenation"
+        finding.suggestion = "Use parameterized queries"
+        finding.confidence = 0.95
+        finding.file = "db.py"
+        finding.line = 42
+
+        captured_payload = {}
+
+        def fake_run(cmd, **kwargs):
+            captured_payload.update(json.loads(kwargs.get("input", "{}")))
+            return MagicMock()
+
+        with patch("post_findings._gh_run_with_retry", side_effect=fake_run):
+            result = pf._post_inline_github(finding, pr_id=5, repo="org/repo", commit_id="sha123", dry_run=False)
+
+        assert result is True
+        assert captured_payload["path"] == "db.py"
+        assert captured_payload["line"] == 42
+        assert captured_payload["commit_id"] == "sha123"
+        assert captured_payload["side"] == "RIGHT"
+        assert "<!-- cr-id: cr-001 -->" in captured_payload["body"]
+
+    def test_post_inline_github_returns_false_on_error(self):
+        import subprocess as sp
+        finding = MagicMock()
+        finding.id = "cr-001"
+        finding.severity = "warning"
+        finding.category = "best_practices"
+        finding.title = "t"
+        finding.message = "m"
+        finding.suggestion = None
+        finding.confidence = 0.8
+        finding.file = "a.py"
+        finding.line = 1
+
+        exc = sp.CalledProcessError(1, "gh", stderr="some error")
+        with patch("post_findings._gh_run_with_retry", side_effect=exc):
+            result = pf._post_inline_github(finding, pr_id=1, repo="org/repo", commit_id="", dry_run=False)
+        assert result is False
+
+    # _gh_run_with_retry
+
+    def test_retry_succeeds_on_first_attempt(self):
+        import subprocess as sp
+        mock_result = MagicMock()
+        with patch("subprocess.run", return_value=mock_result) as mock_sub:
+            result = pf._gh_run_with_retry(["gh", "api", "/test"], capture_output=True, text=True)
+        assert mock_sub.call_count == 1
+
+    def test_retry_retries_on_rate_limit_error(self):
+        import subprocess as sp
+        import time
+
+        rate_limit_exc = sp.CalledProcessError(1, "gh", stderr="API rate limit exceeded")
+        success_result = MagicMock()
+
+        call_count = 0
+
+        def fake_run(cmd, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 2:
+                raise rate_limit_exc
+            return success_result
+
+        with patch("subprocess.run", side_effect=fake_run), \
+             patch("time.sleep"):
+            result = pf._gh_run_with_retry(["gh", "api", "/test"], capture_output=True, text=True, check=True)
+
+        assert call_count == 2
+        assert result is success_result
+
+    def test_retry_raises_non_rate_limit_error_immediately(self):
+        import subprocess as sp
+
+        non_rate_limit_exc = sp.CalledProcessError(1, "gh", stderr="not found")
+        with patch("subprocess.run", side_effect=non_rate_limit_exc):
+            with pytest.raises(sp.CalledProcessError):
+                pf._gh_run_with_retry(["gh", "api", "/test"], capture_output=True, text=True, check=True)
+
+    def test_retry_exhausts_max_retries_on_persistent_rate_limit(self):
+        import subprocess as sp
+        import time
+
+        rate_limit_exc = sp.CalledProcessError(1, "gh", stderr="429 rate limit exceeded")
+        with patch("subprocess.run", side_effect=rate_limit_exc), \
+             patch("time.sleep"):
+            with pytest.raises(sp.CalledProcessError):
+                pf._gh_run_with_retry(
+                    ["gh", "api", "/test"],
+                    max_retries=3, base_delay=0.01,
+                    capture_output=True, text=True, check=True
+                )
+
+    # GitHub end-to-end dry-run with vcs=github
+
+    def test_github_dry_run_produces_valid_output(self, tmp_path):
+        data = {
+            "pr_id": 77,
+            "repo": "org/myrepo",
+            "vcs": "github",
+            "review_modes": ["standard"],
+            "findings": [
+                {
+                    "id": "cr-001",
+                    "file": "app.py",
+                    "line": 5,
+                    "severity": "warning",
+                    "category": "best_practices",
+                    "title": "Magic number",
+                    "message": "Use a named constant",
+                    "confidence": 0.85,
+                }
+            ],
+        }
+        path = tmp_path / "findings.json"
+        path.write_text(json.dumps(data))
+        output = pf.run(findings_path=str(path), dry_run=True, workspace=str(tmp_path))
+        assert output["vcs"] == "github"
+        assert output["pr_id"] == 77
+        assert output["dry_run"] is True
+        assert output["filtering"]["new_findings_posted"] == 1
+
+    def test_github_path_calls_fetch_cr_ids_when_not_dry_run(self, tmp_path):
+        data = {
+            "pr_id": 10,
+            "repo": "org/repo",
+            "vcs": "github",
+            "review_modes": ["standard"],
+            "findings": [],
+        }
+        path = tmp_path / "findings.json"
+        path.write_text(json.dumps(data))
+        with patch("post_findings._fetch_posted_cr_ids_github", return_value=set()) as mock_fetch:
+            pf.run(findings_path=str(path), dry_run=False, workspace=str(tmp_path))
+        mock_fetch.assert_called_once_with(10, "org/repo")

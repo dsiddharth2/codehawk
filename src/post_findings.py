@@ -46,6 +46,40 @@ def _eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
 
 
+def _gh_run_with_retry(cmd, max_retries: int = 3, base_delay: float = 1.0, **kwargs):
+    """
+    subprocess.run wrapper with exponential backoff on GitHub rate-limit errors.
+
+    Retries on CalledProcessError when stderr indicates a rate limit (HTTP 429
+    or secondary rate limit). All other errors are re-raised immediately.
+    """
+    import time
+
+    last_exc: Optional[subprocess.CalledProcessError] = None
+    for attempt in range(max_retries):
+        try:
+            return subprocess.run(cmd, **kwargs)
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or "").lower()
+            is_rate_limit = (
+                "rate limit" in stderr
+                or "429" in stderr
+                or "secondary rate" in stderr
+                or "api rate" in stderr
+            )
+            if is_rate_limit and attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt)
+                _eprint(
+                    f"GitHub rate limit hit; retrying in {delay:.0f}s "
+                    f"(attempt {attempt + 1}/{max_retries})"
+                )
+                time.sleep(delay)
+                last_exc = exc
+            else:
+                raise
+    raise last_exc  # type: ignore[misc]
+
+
 def _validate_schema(data: dict) -> List[str]:
     """
     Validate findings.json against findings-schema.json.
@@ -226,7 +260,7 @@ def _fetch_posted_cr_ids_github(pr_id: int, repo: str) -> Set[str]:
     import re
 
     try:
-        result = subprocess.run(
+        result = _gh_run_with_retry(
             ["gh", "api", f"repos/{repo}/pulls/{pr_id}/comments", "--jq", ".[].body"],
             capture_output=True, text=True, check=True
         )
@@ -308,7 +342,7 @@ def _post_inline_github(finding, pr_id: int, repo: str, commit_id: str, dry_run:
     }
 
     try:
-        subprocess.run(
+        _gh_run_with_retry(
             ["gh", "api", f"repos/{repo}/pulls/{pr_id}/comments",
              "--method", "POST", "--input", "-"],
             input=json.dumps(payload),
@@ -370,7 +404,7 @@ def _handle_fix_verifications_github(fix_verifications, pr_id: int, repo: str, d
         return
 
     try:
-        result = subprocess.run(
+        result = _gh_run_with_retry(
             ["gh", "api", f"repos/{repo}/pulls/{pr_id}/comments",
              "--jq", "[.[] | {id: .id, body: .body}]"],
             capture_output=True, text=True, check=True
@@ -383,7 +417,7 @@ def _handle_fix_verifications_github(fix_verifications, pr_id: int, repo: str, d
             if match and match.group(1) in fixed_ids:
                 comment_id = comment["id"]
                 try:
-                    subprocess.run(
+                    _gh_run_with_retry(
                         ["gh", "api",
                          f"repos/{repo}/pulls/comments/{comment_id}/replies",
                          "--method", "POST",
@@ -660,7 +694,7 @@ def run(
                     repository_id=repo or None,
                 ))
             else:
-                subprocess.run(
+                _gh_run_with_retry(
                     ["gh", "pr", "comment", str(pr_id), "--body", summary_md, "--repo", repo],
                     capture_output=True, text=True, check=True
                 )
