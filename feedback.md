@@ -250,6 +250,8 @@ Both lines compute values that are never used. The actual scoring at line 554–
 
 **Fix:** Remove lines 531 and 553.
 
+**Doer:** fixed in commit c01db19 — removed lines that computed `adjusted_for_scoring` (line 531) and `adjusted_capped` (line 553), both unused; all 66 tests verified passing.
+
 ---
 
 ## Summary
