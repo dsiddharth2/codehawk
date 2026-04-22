@@ -1,0 +1,77 @@
+{
+  "pr_id": 42,
+  "repo": "MyOrg/MyRepo",
+  "vcs": "ado",
+  "review_modes": ["standard", "security"],
+  "tool_calls": 12,
+  "agent": "codex",
+  "findings": [
+    {
+      "id": "cr-001",
+      "file": "src/auth/login.py",
+      "line": 45,
+      "severity": "critical",
+      "category": "security",
+      "title": "SQL injection via unsanitised input",
+      "message": "User input is concatenated directly into a SQL query. Use parameterised queries instead.",
+      "confidence": 0.95,
+      "suggestion": "cursor.execute('SELECT * FROM users WHERE id = %s', (user_id,))"
+    },
+    {
+      "id": "cr-002",
+      "file": "src/auth/login.py",
+      "line": 78,
+      "severity": "warning",
+      "category": "security",
+      "title": "Hardcoded secret key",
+      "message": "The SECRET_KEY is hardcoded in source. Move to environment variable or secrets manager.",
+      "confidence": 0.90,
+      "suggestion": "SECRET_KEY = os.environ['SECRET_KEY']"
+    },
+    {
+      "id": "cr-003",
+      "file": "src/api/users.py",
+      "line": 120,
+      "severity": "warning",
+      "category": "performance",
+      "title": "N+1 query in user list endpoint",
+      "message": "Each user lookup issues a separate DB query. Use select_related() or a JOIN.",
+      "confidence": 0.85,
+      "suggestion": null
+    },
+    {
+      "id": "cr-004",
+      "file": "src/api/users.py",
+      "line": 55,
+      "severity": "suggestion",
+      "category": "best_practices",
+      "title": "Missing return type annotation",
+      "message": "Function get_user_by_id lacks a return type annotation. Add -> Optional[User].",
+      "confidence": 0.80,
+      "suggestion": "def get_user_by_id(user_id: int) -> Optional[User]:"
+    },
+    {
+      "id": "cr-005",
+      "file": "src/utils/helpers.py",
+      "line": 10,
+      "severity": "suggestion",
+      "category": "code_style",
+      "title": "Unused import",
+      "message": "The 'os' module is imported but never used in this file.",
+      "confidence": 0.99,
+      "suggestion": null
+    },
+    {
+      "id": "cr-006",
+      "file": "src/auth/login.py",
+      "line": 15,
+      "severity": "suggestion",
+      "category": "best_practices",
+      "title": "Low confidence finding — should be filtered",
+      "message": "This finding has confidence below 0.7 and should be excluded by the filter.",
+      "confidence": 0.65,
+      "suggestion": null
+    }
+  ],
+  "fix_verifications": []
+}

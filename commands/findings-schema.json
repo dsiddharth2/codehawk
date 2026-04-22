@@ -1,0 +1,125 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "codehawk/findings-schema.json",
+  "title": "FindingsFile",
+  "description": "Contract for findings.json written by the review agent (Phase 1) and consumed by post_findings.py (Phase 2).",
+  "type": "object",
+  "required": ["pr_id", "repo", "vcs", "review_modes", "findings"],
+  "additionalProperties": false,
+  "properties": {
+    "pr_id": {
+      "type": "integer",
+      "description": "Pull request / PR number"
+    },
+    "repo": {
+      "type": "string",
+      "description": "Repository name or ID"
+    },
+    "vcs": {
+      "type": "string",
+      "enum": ["ado", "github"],
+      "description": "VCS provider"
+    },
+    "review_modes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Active review modes, e.g. [\"standard\", \"security\"]"
+    },
+    "findings": {
+      "type": "array",
+      "description": "List of code review findings",
+      "items": {
+        "$ref": "#/$defs/Finding"
+      }
+    },
+    "fix_verifications": {
+      "type": "array",
+      "description": "Fix verification results from a re-push (optional)",
+      "items": {
+        "$ref": "#/$defs/FixVerification"
+      }
+    },
+    "tool_calls": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total tool calls used by the agent (for monitoring cap)"
+    },
+    "agent": {
+      "type": ["string", "null"],
+      "enum": ["codex", "claude", "gemini", null],
+      "description": "Agent that produced this file"
+    }
+  },
+  "$defs": {
+    "Finding": {
+      "type": "object",
+      "required": ["id", "file", "line", "severity", "category", "title", "message", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^cr-[0-9]+$",
+          "description": "Unique finding ID, e.g. cr-001"
+        },
+        "file": {
+          "type": "string",
+          "description": "File path relative to repo root"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Line number of the finding"
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["critical", "warning", "suggestion"],
+          "description": "Finding severity level"
+        },
+        "category": {
+          "type": "string",
+          "enum": ["security", "performance", "best_practices", "code_style", "documentation"],
+          "description": "Finding category"
+        },
+        "title": {
+          "type": "string",
+          "description": "Short one-line summary of the finding"
+        },
+        "message": {
+          "type": "string",
+          "description": "Full description of the finding"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Confidence score (0.0 – 1.0). Findings below 0.7 are filtered out."
+        },
+        "suggestion": {
+          "type": ["string", "null"],
+          "description": "Optional suggested fix"
+        }
+      }
+    },
+    "FixVerification": {
+      "type": "object",
+      "required": ["cr_id", "status", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "cr_id": {
+          "type": "string",
+          "pattern": "^cr-[0-9]+$",
+          "description": "Matches a Finding.id from the prior review"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["fixed", "still_present", "not_relevant"],
+          "description": "Outcome of fix verification"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Human-readable explanation of the classification"
+        }
+      }
+    }
+  }
+}
