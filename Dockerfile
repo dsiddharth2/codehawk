@@ -24,24 +24,24 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 # Install Node.js tools (Codex + repomix)
 RUN npm install -g @openai/codex repomix
 
-# Set up Python virtualenv
+# Set up Python virtualenv and install dependencies
+# Install deps separately from source so this layer is cached
 ENV VIRTUAL_ENV=/opt/venv
 RUN python3 -m venv $VIRTUAL_ENV
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
-# Install Python dependencies
-COPY pyproject.toml /app/pyproject.toml
-RUN pip install --no-cache-dir /app
+RUN pip install --no-cache-dir \
+    "azure-devops>=7.1,<8.0" \
+    "pydantic>=2.0" \
+    "pydantic-settings>=2.0" \
+    msrest \
+    jsonschema
 
 # Copy application code
 COPY src/ /app/src/
 COPY commands/ /app/commands/
 COPY templates/ /app/templates/
-
-# Copy AGENTS.md if it exists (best-effort)
-COPY AGENTS.md /app/AGENTS.md 2>/dev/null || true
-
-# Copy entrypoint
+COPY AGENTS.md /app/AGENTS.md
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 

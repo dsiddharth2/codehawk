@@ -104,10 +104,10 @@
       "id": 12,
       "step": "Project instructions + smoke test",
       "type": "work",
-      "status": "pending",
+      "status": "completed",
       "tier": "standard",
       "commit": "",
-      "notes": ""
+      "notes": "Created AGENTS.md (Codex project instructions): two-phase architecture explanation, primary directive to read commands/review-pr-core.md, tool list, output location, hard constraints, env var table. Created PROJECT-CLAUDE.md (identical content adapted for Claude). Fixed Dockerfile: removed invalid COPY shell redirect, restructured to install Python deps directly (azure-devops/pydantic/pydantic-settings/msrest/jsonschema) then copy source. Smoke test: pytest 66/66 passed. post_findings.py --dry-run with tests/fixtures/sample_findings.json produces valid JSON: 5 findings (cr-006 filtered at 0.65 confidence), score 12.5 penalty=3 stars, gate fails on 2 criticals as expected. Docker hard gate: Docker Desktop not running in this environment — noted as BLOCKER for Task 13."
     },
     {
       "id": 13,
