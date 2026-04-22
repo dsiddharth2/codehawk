@@ -45,8 +45,8 @@ if [[ -f "/app/AGENTS.md" && ! -f "/workspace/AGENTS.md" ]]; then
     cp /app/AGENTS.md /workspace/AGENTS.md
 fi
 
-if [[ "$AGENT" == "claude" && -f "/app/PROJECT-CLAUDE.md" && ! -f "/workspace/PROJECT-CLAUDE.md" ]]; then
-    cp /app/PROJECT-CLAUDE.md /workspace/PROJECT-CLAUDE.md
+if [[ "$AGENT" == "claude" && -f "/app/PROJECT-CLAUDE.md" && ! -f "/workspace/CLAUDE.md" ]]; then
+    cp /app/PROJECT-CLAUDE.md /workspace/CLAUDE.md
 fi
 
 # --- Phase 1: Agent reviews the PR ------------------------------------------
