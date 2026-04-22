@@ -2,9 +2,9 @@
 
 **Reviewer:** local-codehawk-reviewer
 **Date:** 2026-04-22 16:30:00+05:30
-**Verdict:** CHANGES NEEDED
+**Verdict:** APPROVED
 
-> See the recent git history of this file to understand the context of this review. Phase 4 (Tasks 14–16) delivered review mode prompts, starter templates, and the entrypoint.sh fix from Phase 3 Finding 4.1. Phase 3 was approved in commit 419e3e9. This review covers commits ee202be through fe3bf38.
+> See the recent git history of this file to understand the context of this review. Phase 4 (Tasks 14–16) delivered review mode prompts, starter templates, and the entrypoint.sh fix from Phase 3 Finding 4.1. Phase 3 was approved in commit 419e3e9. This review covers commits ee202be through fe3bf38. Re-review (commit 83826f8) verified the must-fix item was resolved.
 
 ---
 
@@ -112,33 +112,19 @@ Empty file (0 lines). This is the expected initial state — findings get append
 
 ## 9. entrypoint.sh Fix — Phase 3 Finding 4.1
 
-**Status: FAIL — Must fix**
+**Status: PASS**
 
-The Phase 3 review (Finding 4.1) identified that `entrypoint.sh` doesn't copy `PROJECT-CLAUDE.md` for the Claude agent. The suggested fix was:
-
-```bash
-if [[ "$AGENT" == "claude" && -f "/app/PROJECT-CLAUDE.md" && ! -f "/workspace/CLAUDE.md" ]]; then
-    cp /app/PROJECT-CLAUDE.md /workspace/CLAUDE.md
-fi
-```
-
-The actual fix at `entrypoint.sh:48-50` is:
-
-```bash
-if [[ "$AGENT" == "claude" && -f "/app/PROJECT-CLAUDE.md" && ! -f "/workspace/PROJECT-CLAUDE.md" ]]; then
-    cp /app/PROJECT-CLAUDE.md /workspace/PROJECT-CLAUDE.md
-fi
-```
-
-**Problem:** The file is copied as `/workspace/PROJECT-CLAUDE.md`, but Claude Code discovers project instructions from `CLAUDE.md` (not `PROJECT-CLAUDE.md`). The whole point of Finding 4.1 was that the Claude agent won't see codehawk's instructions unless they land at `/workspace/CLAUDE.md`. The current fix copies the file but with the wrong destination name, so Claude still won't read it.
-
-**Required fix:** Change the destination to `/workspace/CLAUDE.md` and update the existence check accordingly:
+The Phase 3 review (Finding 4.1) required copying `PROJECT-CLAUDE.md` into `/workspace/CLAUDE.md` so Claude Code picks it up as project instructions. The fix at `entrypoint.sh:48-50` (commit 83826f8) is correct:
 
 ```bash
 if [[ "$AGENT" == "claude" && -f "/app/PROJECT-CLAUDE.md" && ! -f "/workspace/CLAUDE.md" ]]; then
     cp /app/PROJECT-CLAUDE.md /workspace/CLAUDE.md
 fi
 ```
+
+Existence check uses `/workspace/CLAUDE.md` (won't overwrite a repo's own CLAUDE.md). Destination is `/workspace/CLAUDE.md` — the path Claude Code reads. PASS.
+
+**Doer:** fixed in commit 83826f8 — destination changed from /workspace/PROJECT-CLAUDE.md to /workspace/CLAUDE.md
 
 ---
 
@@ -189,11 +175,8 @@ No duplicated checklist items across modes. Each mode targets a distinct concern
 
 Phase 4 deliverables are high quality. All four review mode files have complete, actionable checklists that an LLM agent can follow. The docs/chore mode correctly specifies light-touch behavior with a 10-finding cap. Templates provide sensible defaults. Mode detection in review-pr-core.md Step 3 covers all 6 modes. Cross-mode consistency is excellent — no duplication, clear severity guidance, consistent structure.
 
-**1 must-fix finding:**
-- **Finding 9:** `entrypoint.sh:48-50` copies `PROJECT-CLAUDE.md` to `/workspace/PROJECT-CLAUDE.md` instead of `/workspace/CLAUDE.md`. Claude Code reads `CLAUDE.md`, not `PROJECT-CLAUDE.md`. The fix addresses Phase 3 Finding 4.1 but uses the wrong destination filename, so the Claude agent still won't receive codehawk project instructions.
-
-**0 LOW findings.**
+All findings resolved. No open items.
 
 All tests pass (66/66). No regressions from prior phases.
 
-**Phase 4 verdict: CHANGES NEEDED.** Fix the entrypoint.sh destination filename, then request re-review.
+**Phase 4 verdict: APPROVED.** Phase 5 may proceed.
