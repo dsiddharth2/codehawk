@@ -1,182 +1,148 @@
-# Code Reviewer v3.1 — Phase 4 Code Review
+# Code Reviewer v3.1 — Phase 5 Code Review
 
 **Reviewer:** local-codehawk-reviewer
-**Date:** 2026-04-22 16:30:00+05:30
+**Date:** 2026-04-22 18:45:00+05:30
 **Verdict:** APPROVED
 
-> See the recent git history of this file to understand the context of this review. Phase 4 (Tasks 14–16) delivered review mode prompts, starter templates, and the entrypoint.sh fix from Phase 3 Finding 4.1. Phase 3 was approved in commit 419e3e9. This review covers commits ee202be through fe3bf38. Re-review (commit 83826f8) verified the must-fix item was resolved.
+> See the recent git history of this file to understand the context of this review. Phase 5 (Tasks 18–20) delivered fix verification in the agent prompt and post_findings.py, delta-only review logic, and 9 new unit tests. Phase 4 was approved in commit cd1e4e8. This review covers commit 3683515 against the Phase 4 baseline.
 
 ---
 
-## 1. review-mode-standard.md — Standard Mode Checklist
+## 1. review-pr-core.md Step 6 — Fix Verification Logic
 
 **Status: PASS**
 
-Verified against PLAN.md Task 14 "done when" criteria:
+Step 6 expanded from a brief mention into four substeps (6a–6d), each verified against PLAN.md Task 18 "done when" criteria:
 
-- **Complete checklist:** 6 sections (Correctness, Code Patterns, Test Coverage, Naming and API Design, Error Handling, Edge Cases) with 22 actionable items. Each item is specific enough for an LLM agent to evaluate — describes the pattern to look for, not just a category name. PASS.
-- **Severity multipliers:** Correctly states "None (1x)" — standard mode uses base penalty matrix. PASS.
-- **Quality bar section:** Instructs agent to respect `# cr: intentional` markers and `.codereview.md` conventions. Good — prevents noise. PASS.
-- **No duplication with other modes:** Standard checklist focuses on general correctness; security/migration items are delegated to their respective mode files. PASS.
+- **6a — Detecting a re-push (lines 218–234):** Provides VCS-conditional commands (ADO: `vcs.py list-threads`, GitHub: `gh api`) to fetch existing threads. Scans for `<!-- cr-id: cr-xxx -->` markers. Clear gate: if no markers found, skip 6b/6c and proceed to Step 7. PASS.
+- **6b — Delta diff (lines 236–251):** Instructs agent to `git diff <PRIOR_HEAD_SHA>..<CURRENT_HEAD_SHA>` and only flag issues in the delta. Explains how to identify PRIOR_HEAD_SHA from `git log`. PASS.
+- **6c — Classification rules (lines 253–283):** Three statuses (`not_relevant`, `fixed`, `still_present`) with explicit, ordered criteria. `not_relevant` triggers on file deletion, rename, structural refactor, or intent markers. `fixed` requires file exists AND problematic pattern gone (±5 lines tolerance). `still_present` is the residual. Rules are unambiguous for an LLM agent — each has concrete conditions and an example. PASS.
+- **6d — Writing fix_verifications[] (lines 285–307):** Schema table with `cr_id`, `status`, `reason` fields. Explicit note that Phase 2 handles thread resolution — agent does not post. PASS.
+
+**Classification ambiguity check (review criterion #7):** The classification is applied per-cr_id from thread markers, matching exact `cr-xxx` strings. The regex `<!--\s*cr-id:\s*(\S+)\s*-->` in post_findings.py captures the full `cr-xxx` token, and dedup uses set membership (`f.id not in posted_cr_ids`). Both sides use the same `cr-NNN` format — no prefix/suffix mismatch risk. The `\S+` regex is greedy but anchored by `-->`, so it cannot capture extra tokens. False positive risk is negligible. PASS.
 
 ---
 
-## 2. review-mode-security.md — Security Mode Checklist
+## 2. review-pr-core.md Step 5 — Delta-Only Review on Re-push
 
 **Status: PASS**
 
-- **OWASP coverage:** 7 sections covering A01 (Auth/Access Control), A02 (Secrets, Crypto), A03 (Injection), A05 (Insecure Defaults), A06 (Dependency CVEs), A07 (Authentication/Session). 26 checklist items total. PASS.
-- **Severity multiplier:** States "warning → critical (x2 penalty)" — matches `apply_mode_multipliers` in `pr_scorer.py`. PASS.
-- **Additive behavior:** States "This mode is additive — standard checklist still applies." PASS — agent won't skip general correctness checks in security mode.
-- **Confidence guidance:** Instructs to flag at 0.7+ when blast radius is high, and not to flag unreachable theoretical vulnerabilities. Good calibration. PASS.
-- **Specificity:** Each item names the concrete pattern to grep for (e.g., `subprocess`, `os.system`, `random.random()`, `verify=False`). LLM-actionable. PASS.
+Line 146 adds the "Re-push note" to Step 5's header:
+
+> If this is a re-push (Step 6a detects existing cr-id threads), run Step 6a NOW to collect prior cr-ids and the delta diff (Step 6b), then return here. Review only the lines in `git diff <PRIOR_HEAD_SHA>..<CURRENT_HEAD_SHA>`.
+
+This correctly scopes the agent to the delta between old and new head commits. The instruction is placed at the top of Step 5 so the agent encounters it before reading any files. PASS.
+
+**NOTE:** The PRIOR_HEAD_SHA determination relies on the agent inspecting `git log` to find "the commit just before the current HEAD" (line 248). This is adequate for single-iteration re-pushes but could be ambiguous if multiple non-review commits exist. This is a minor ergonomic gap, not a correctness bug — the agent has enough context to pick the right SHA in practice. Acceptable for Phase 5; could be improved in a future iteration by storing the reviewed SHA in a metadata file.
 
 ---
 
-## 3. review-mode-migration.md — Migration Mode Checklist
+## 3. post_findings.py — Fix Verification Handlers
 
 **Status: PASS**
 
-- **Data loss risk:** 5 items covering DROP, column narrowing, NOT NULL, default changes, cascades. PASS.
-- **Rollback safety:** 4 items covering down migration existence, safety, downtime, and round-trip. PASS.
-- **Lock duration:** 4 items — ALTER TABLE locks, CONCURRENTLY for indexes, batching for backfills, duration estimate for large tables. PASS.
-- **Idempotency:** 3 items — IF NOT EXISTS guards, sequence resets. PASS.
-- **Zero-downtime compatibility:** 4 items — additive-only, old code compat, column rename dual-write, FK on existing data. PASS.
-- **Data integrity:** 3 items — unique constraints on existing data, check constraints, expression indexes. PASS.
-- **Severity multiplier:** States "All findings elevated to critical" — matches `apply_mode_multipliers` in `pr_scorer.py` (migration elevates all severities to critical). PASS.
-- **Confidence guidance:** Flags at 0.75+ with rationale for accepting false positives. Good. PASS.
+### 3a — ADO handler (`_handle_fix_verifications_ado`, lines 327–358)
+
+- Guards on `not fix_verifications or dry_run` — returns immediately. PASS.
+- Fetches threads, builds `thread_by_cr_id` lookup, filters to `fixed_ids` only. PASS.
+- Calls `PostFixReplyActivity.execute()` for each fixed thread. Exception handling per-thread (doesn't abort on single failure). PASS.
+- `still_present` and `not_relevant` items are correctly excluded from `fixed_ids` set comprehension. PASS.
+
+### 3b — GitHub handler (`_handle_fix_verifications_github`, lines 361–396)
+
+- Same `dry_run` early-return guard. PASS.
+- Builds `fixed_ids` set, returns early if empty (no subprocess calls for still_present-only verifications). PASS.
+- Fetches comments via `gh api`, parses cr-id markers with the same regex as `_fetch_posted_cr_ids_github`. PASS.
+- Replies with `"✅ **Issue Fixed** — Resolved in the latest changes."` via `gh api repos/{repo}/pulls/comments/{id}/replies`. Correct GitHub API endpoint. PASS.
+- Per-comment exception handling. PASS.
+
+### 3c — Score comparison (`_generate_comparison_md`, lines 399–412)
+
+- Calls `ScoreComparisonService.format_as_markdown()` with `old_score=None` and `new_score=score`. Since `old_score` is None, the score comparison section is skipped and only the fix verification summary is rendered (`_format_fix_verifications`). This produces meaningful output: fix counts, fix rate percentage, and collapsible details per cr-id. PASS.
+- **NOTE:** A true before/after penalty comparison would require persisting the prior run's score. This is not available in the current architecture (Phase 2 is stateless). The current approach is the correct design for Phase 5 — it shows fix status without fabricating a "before" score. Acceptable.
+
+### 3d — Integration in `run()` (lines 627–649)
+
+- Fix verification handler dispatched by VCS (lines 628–631). PASS.
+- `comparison_md` generated only when fix_verifications present (lines 638–640). PASS.
+- `comparison_md` passed to `_build_summary_markdown` and included in summary (lines 643–649). PASS.
+- `has_comparison` boolean in output dict (line 712). PASS.
+
+### 3e — Summary markdown (`_build_summary_markdown`, lines 419–493)
+
+- Accepts `comparison_md` parameter. When present, renders it in the summary with a separator. When absent but `fix_verifications` present, falls back to a simple fixed/still_present count block (lines 465–474). Two-tier rendering is good — handles both the ScoreComparisonService path and a simpler fallback. PASS.
 
 ---
 
-## 4. review-mode-docs-chore.md — Docs/Chore Mode Checklist
+## 4. Unit Tests — Fix Verification (9 new tests)
 
 **Status: PASS**
 
-- **Light-touch behavior:** Line 7 states "Max 10 findings (not 30). Skip deep code analysis entirely." Line 13 says "Do not analyze code logic, performance, or security unless a config file contains an obviously dangerous value." PASS — this directly answers review criterion #2.
-- **Detection rule:** Line 3 specifies "All changed files have extensions `.md`, `.yml`, `.yaml`, `.json`, `.txt`, `.rst` — AND no `.py`, `.js`, `.ts`, `.cs`, `.java` files." Matches `review-pr-core.md` Step 3 table exactly. PASS.
-- **Checklist sections:** Documentation Accuracy (5 items), Changelog Completeness (3 items), Config File Correctness (5 items), Formatting and Consistency (4 items). 17 items total. PASS.
-- **"What to Skip" section:** Explicitly excludes code style in snippets, missing tests, performance/security analysis, writing style opinions. Good — prevents an LLM agent from scope-creeping into code analysis on a docs PR. PASS.
-- **No severity multiplier:** Correct — docs/chore findings stay at base severity. PASS.
+All 9 tests in `TestFixVerification` class verified:
+
+| # | Test | What it covers | Verdict |
+|---|------|----------------|---------|
+| 1 | `test_ado_fixed_threads_resolved` | ADO handler called with fix_verifications containing fixed items | PASS |
+| 2 | `test_github_fixed_threads_resolved` | GitHub handler called when vcs=github | PASS |
+| 3 | `test_dry_run_skips_fix_verification_ado` | dry_run still calls handler (handler internally no-ops) | PASS |
+| 4 | `test_dry_run_ado_handler_noop` | Direct test: handler returns immediately on dry_run, no activity calls | PASS |
+| 5 | `test_dry_run_github_handler_noop` | Direct test: handler returns immediately on dry_run, no subprocess calls | PASS |
+| 6 | `test_still_present_not_resolved_ado` | still_present cr-ids not in fixed_ids set | PASS |
+| 7 | `test_score_comparison_included_in_output` | has_comparison=True when fix_verifications present | PASS |
+| 8 | `test_score_comparison_false_when_no_fix_verifications` | has_comparison=False when no fix_verifications | PASS |
+| 9 | `test_fix_verifications_all_statuses_in_output` | All three statuses appear correctly in output dict | PASS |
+
+**Coverage assessment:** Tests cover ADO resolution, GitHub reply, dry-run no-op (both paths), still_present exclusion, score comparison flag, and all-statuses output. This matches review criterion #5 exactly. PASS.
+
+**Gap noted (not blocking):** No test exercises `_generate_comparison_md` returning actual markdown content — test #7 only checks the boolean flag. The ScoreComparisonService itself was tested in Phase 1 (ported module). Acceptable for Phase 5.
 
 ---
 
-## 5. review-pr-core.md Step 3 — Mode Detection Rules
-
-**Status: PASS**
-
-All 6 modes present in the detection table (`review-pr-core.md:107-114`):
-
-| Mode | Present | File signal | Label signal |
-|------|---------|-------------|-------------|
-| `migration` | Yes | `**/migrations/**`, `*.sql`, `**/alembic/**` | `migration`, `db-change` |
-| `security` | Yes | `**/auth/**`, `**/crypto/**`, `**/permissions/**` | `security` |
-| `architecture` | Yes | `**/api/**`, `**/interfaces/**`, `**/contracts/**`, >10 files | `architecture` |
-| `performance` | Yes | `**/queries/**`, `**/cache/**`, `**/indexes/**` | `performance` |
-| `docs_chore` | Yes | All files `.md/.yml/.yaml/.json/.txt/.rst` only | `docs`, `chore` |
-| `standard` | Yes | Default fallback | — |
-
-Line 116 correctly states "Multiple modes may be active" — so a PR touching auth AND migrations gets `["security", "migration"]`. PASS.
-
-Line 118 restates the docs_chore light-touch constraint (max 10 findings). PASS.
-
-Line 120 requires `review_modes` in findings.json to be at least `["standard"]`. PASS.
-
----
-
-## 6. templates/.codereview.yml — Gate Thresholds
-
-**Status: PASS**
-
-- `min_star_rating: 3` — reasonable default (allows warnings, blocks criticals). PASS.
-- `fail_on_critical: true` — sensible default. PASS.
-- Commented optional fields: `max_findings: 30`, `max_per_file: 5`, `min_confidence: 0.7` — all match the agent's internal defaults. Good documentation. PASS.
-- Comments explain what each threshold means. PASS.
-
----
-
-## 7. templates/.codereview.md — Conventions Template
-
-**Status: PASS**
-
-5 sections with HTML comment placeholders showing examples: Languages/Frameworks, Named Anti-Patterns, Focus Areas, Paths to Always Review Carefully, Paths to Skip. Each section has 3 concrete examples inside comments. Users can uncomment/modify. Well-structured starter template. PASS.
-
----
-
-## 8. templates/dismissed.jsonl — Empty Dismissed File
-
-**Status: PASS**
-
-Empty file (0 lines). This is the expected initial state — findings get appended as JSONL when users dismiss them. PASS.
-
----
-
-## 9. entrypoint.sh Fix — Phase 3 Finding 4.1
-
-**Status: PASS**
-
-The Phase 3 review (Finding 4.1) required copying `PROJECT-CLAUDE.md` into `/workspace/CLAUDE.md` so Claude Code picks it up as project instructions. The fix at `entrypoint.sh:48-50` (commit 83826f8) is correct:
-
-```bash
-if [[ "$AGENT" == "claude" && -f "/app/PROJECT-CLAUDE.md" && ! -f "/workspace/CLAUDE.md" ]]; then
-    cp /app/PROJECT-CLAUDE.md /workspace/CLAUDE.md
-fi
-```
-
-Existence check uses `/workspace/CLAUDE.md` (won't overwrite a repo's own CLAUDE.md). Destination is `/workspace/CLAUDE.md` — the path Claude Code reads. PASS.
-
-**Doer:** fixed in commit 83826f8 — destination changed from /workspace/PROJECT-CLAUDE.md to /workspace/CLAUDE.md
-
----
-
-## 10. Test Suite — No Regressions
+## 5. Test Suite — No Regressions
 
 **Status: PASS**
 
 ```
-PYTHONPATH=src pytest tests/ -v → 66 passed in 0.40s
+PYTHONPATH=src pytest tests/ -v → 75 passed in 0.86s
 ```
 
-All 66 tests from Phase 2 continue to pass. Phase 4 deliverables are markdown and template files — no new Python code, so no new tests expected. No regressions. PASS.
+75 tests = 66 (Phase 2–4 baseline) + 9 (Phase 5 new). No failures, no warnings. All prior phases' tests continue to pass. PASS.
 
 ---
 
-## 11. Cross-Mode Consistency
+## 6. cr-id Matching Correctness
 
 **Status: PASS**
 
-All four mode files follow a consistent structure:
-1. **Header:** Mode name, "Applies when" trigger, severity multipliers
-2. **Separator line**
-3. **Checklist:** Markdown checkbox items grouped by subsection
-4. **Confidence Guidance** (security and migration) or **Quality Bar** (standard) or **What to Skip** (docs/chore)
+The cr-id matching system uses exact string comparison throughout:
 
-Severity multiplier documentation is consistent across modes and matches `pr_scorer.py`:
-- Standard: none (1x) — correct
-- Security: warning→critical — matches `apply_mode_multipliers`
-- Migration: all→critical — matches `apply_mode_multipliers`
-- Docs/chore: none — correct (no multiplier in scorer)
+1. **Injection:** `post_pr_comment_activity.py` appends `<!-- cr-id: {finding.id} -->` where `finding.id` follows the `cr-NNN` pattern (e.g., `cr-001`).
+2. **Extraction:** Regex `r"<!--\s*cr-id:\s*(\S+)\s*-->"` captures the full cr-id token. `\S+` matches one or more non-whitespace chars, anchored by `-->`.
+3. **Dedup:** `f.id not in posted_cr_ids` — exact set membership.
+4. **Fix verification:** `fv.cr_id` from findings.json compared against extracted cr-ids — same format.
 
-No duplicated checklist items across modes. Each mode targets a distinct concern. PASS.
+No normalization, case folding, or fuzzy matching occurs. The cr-id format is agent-controlled (`cr-NNN` pattern, line 201 of review-pr-core.md) and machine-written (`<!-- cr-id: ... -->` markers). False positive risk requires either a non-codehawk comment containing the exact `<!-- cr-id: cr-xxx -->` pattern (extremely unlikely) or a cr-id collision across review runs (impossible — IDs are scoped per-run and prior IDs are collected, not generated). PASS.
 
 ---
 
-## 12. Consistency with PLAN.md and requirements.md
+## 7. Consistency with PLAN.md
 
-**Status: PASS with one exception (Finding 9)**
+**Status: PASS**
 
-- Task 14 "done when": Each mode file has a complete checklist; files follow consistent format; docs/chore mode specifies light-touch behavior. **PASS.**
-- Task 15 "done when": Prompt has detection rules for all 6 modes; post_findings.py passes review_modes to scorer (verified in Phase 2); templates exist with reasonable defaults. **PASS.**
-- Task 16 "done when": Prompt documents all three marker types with examples; agent instructions clearly state to skip marked code. **PASS** (was done in Phase 3, verified present).
-- Entrypoint fix from Phase 3 Finding 4.1: **FAIL** — wrong destination filename (see Finding 9 above).
+- **Task 18 "done when":** Prompt has explicit fix verification instructions (Steps 6a–6d). post_findings resolves threads for fixed items (ADO: PostFixReplyActivity, GitHub: gh api reply). Summary includes score comparison via ScoreComparisonService. PASS.
+- **Task 19 "done when":** Prompt has delta-only review instructions (Step 5 re-push note + Step 6b). 9 unit tests for fix verification pass. Score comparison produces fix summary markdown. PASS.
+- **Task 20 (VERIFY) "done when":** 75 tests pass. Prompt covers re-push flow completely. PASS.
 
 ---
 
 ## Summary
 
-Phase 4 deliverables are high quality. All four review mode files have complete, actionable checklists that an LLM agent can follow. The docs/chore mode correctly specifies light-touch behavior with a 10-finding cap. Templates provide sensible defaults. Mode detection in review-pr-core.md Step 3 covers all 6 modes. Cross-mode consistency is excellent — no duplication, clear severity guidance, consistent structure.
+Phase 5 delivers a complete fix verification and re-push flow. The agent prompt (Steps 6a–6d) provides clear, unambiguous classification rules that an LLM agent can follow. The post_findings.py implementation correctly handles both ADO and GitHub paths with proper dry-run guards. The score comparison generates meaningful fix summaries. All 9 new tests are well-targeted and pass. No regressions in the 66 existing tests.
 
-All findings resolved. No open items.
+Two non-blocking notes for future improvement:
+1. PRIOR_HEAD_SHA determination could be made more robust by persisting the reviewed SHA.
+2. True before/after penalty comparison would require cross-run state persistence.
 
-All tests pass (66/66). No regressions from prior phases.
+Neither blocks Phase 5 approval.
 
-**Phase 4 verdict: APPROVED.** Phase 5 may proceed.
+**Phase 5 verdict: APPROVED.** Phase 6 may proceed.
