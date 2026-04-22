@@ -156,27 +156,27 @@
       "id": 18,
       "step": "Fix verification in prompt + post_findings",
       "type": "work",
-      "status": "pending",
+      "status": "completed",
       "tier": "standard",
       "commit": "",
-      "notes": ""
+      "notes": "Expanded review-pr-core.md Step 6 into 6a-6d: detecting re-push via cr-id markers, delta diff instructions (git diff PRIOR_HEAD..CURRENT_HEAD), explicit classification criteria (fixed/still_present/not_relevant with examples), fix_verifications[] schema, note that Phase 2 handles thread resolution. Added _handle_fix_verifications_github() to post_findings.py (replies with '✅ Issue Fixed' via gh api). Added _generate_comparison_md() using ScoreComparisonService. Updated _build_summary_markdown() to accept comparison_md. Updated run() to call correct fix verification handler by VCS, generate comparison_md, pass to summary. Added has_comparison to output dict."
     },
     {
       "id": 19,
       "step": "Delta-only review logic + re-push tests",
       "type": "work",
-      "status": "pending",
+      "status": "completed",
       "tier": "standard",
       "commit": "",
-      "notes": ""
+      "notes": "Added re-push note to Step 5 header in review-pr-core.md directing agent to run Steps 6a/6b first on re-push and only review git diff delta. Added 9 unit tests in tests/test_post_findings.py (TestFixVerification class): ADO thread resolution called for fixed items, GitHub handler called for vcs=github, dry_run is no-op for both ADO and GitHub handlers, still_present cr-ids not in fixed_ids, has_comparison=True in output when fix_verifications present, has_comparison=False when absent, all three statuses appear in output correctly. 75 tests pass (was 66)."
     },
     {
       "id": 20,
       "step": "VERIFY: Phase 5 — Fix Verification + Re-push",
       "type": "verify",
-      "status": "pending",
+      "status": "completed",
       "commit": "",
-      "notes": ""
+      "notes": "pytest: 75 passed, 0 failed. Fix verification tests specifically pass (TestFixVerification: 9 tests). Prompt covers re-push flow: Step 5 re-push note, Steps 6a-6d cover detecting re-push, getting delta diff, classifying each finding, and writing fix_verifications[]. Pushed to origin."
     },
     {
       "id": 21,

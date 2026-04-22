@@ -326,15 +326,12 @@ def _post_inline_github(finding, pr_id: int, repo: str, commit_id: str, dry_run:
 
 def _handle_fix_verifications_ado(fix_verifications, pr_id: int, repo: str, dry_run: bool):
     """Resolve ADO threads for cr-ids classified as fixed."""
-    if not fix_verifications:
+    if not fix_verifications or dry_run:
         return
 
     from activities.fetch_pr_comments_activity import FetchPRCommentsActivity
     from activities.post_fix_reply_activity import PostFixReplyActivity
     from config import get_settings
-
-    if dry_run:
-        return
 
     try:
         settings = get_settings()
@@ -361,6 +358,60 @@ def _handle_fix_verifications_ado(fix_verifications, pr_id: int, repo: str, dry_
         _eprint(f"Warning: fix verification resolution failed: {exc}")
 
 
+def _handle_fix_verifications_github(fix_verifications, pr_id: int, repo: str, dry_run: bool):
+    """Reply to GitHub PR review comments for cr-ids classified as fixed."""
+    if not fix_verifications or dry_run:
+        return
+
+    import re
+
+    fixed_ids = {fv.cr_id for fv in fix_verifications if fv.status == "fixed"}
+    if not fixed_ids:
+        return
+
+    try:
+        result = subprocess.run(
+            ["gh", "api", f"repos/{repo}/pulls/{pr_id}/comments",
+             "--jq", "[.[] | {id: .id, body: .body}]"],
+            capture_output=True, text=True, check=True
+        )
+        comments = json.loads(result.stdout)
+
+        for comment in comments:
+            body = comment.get("body", "")
+            match = re.search(r"<!--\s*cr-id:\s*(\S+)\s*-->", body)
+            if match and match.group(1) in fixed_ids:
+                comment_id = comment["id"]
+                try:
+                    subprocess.run(
+                        ["gh", "api",
+                         f"repos/{repo}/pulls/comments/{comment_id}/replies",
+                         "--method", "POST",
+                         "-f", "body=✅ **Issue Fixed** — Resolved in the latest changes."],
+                        capture_output=True, text=True, check=True
+                    )
+                except subprocess.CalledProcessError as exc:
+                    _eprint(f"Warning: failed to reply to GitHub comment {comment_id}: {exc.stderr}")
+    except Exception as exc:
+        _eprint(f"Warning: GitHub fix verification failed: {exc}")
+
+
+def _generate_comparison_md(score, fix_verifications, pr_id: int) -> str:
+    """Generate before/after score comparison markdown using ScoreComparisonService."""
+    try:
+        from score_comparison import ScoreComparisonService
+        svc = ScoreComparisonService()
+        return svc.format_as_markdown(
+            old_score=None,
+            new_score=score,
+            fix_verifications=fix_verifications,
+            pr_title=f"PR #{pr_id}",
+        )
+    except Exception as exc:
+        _eprint(f"Warning: failed to generate score comparison: {exc}")
+        return ""
+
+
 # ---------------------------------------------------------------------------
 # Summary formatting
 # ---------------------------------------------------------------------------
@@ -371,9 +422,8 @@ def _build_summary_markdown(
     score,
     gate_result: Dict[str, Any],
     fix_verifications: list,
+    comparison_md: str = "",
 ) -> str:
-    from utils.markdown_formatter import MarkdownFormatter
-
     severity_counts = {"critical": 0, "warning": 0, "suggestion": 0}
     for f in filtered_findings:
         severity_counts[f.severity] = severity_counts.get(f.severity, 0) + 1
@@ -388,7 +438,7 @@ def _build_summary_markdown(
 
     if score:
         lines += [
-            f"## 📈 PR Quality Score",
+            "## 📈 PR Quality Score",
             "",
             f"### Overall Rating: {score.overall_stars} ({score.quality_level})",
             f"**Total Penalty: {score.total_penalty:.1f} points** _(Lower is better!)_",
@@ -405,7 +455,14 @@ def _build_summary_markdown(
         "",
     ]
 
-    if fix_verifications:
+    if comparison_md:
+        lines += [
+            "---",
+            "",
+            comparison_md,
+            "",
+        ]
+    elif fix_verifications:
         fixed = sum(1 for fv in fix_verifications if fv.status == "fixed")
         still = sum(1 for fv in fix_verifications if fv.status == "still_present")
         lines += [
@@ -568,32 +625,45 @@ def run(
 
     # 9. Handle fix verifications
     if findings_file.fix_verifications:
-        _handle_fix_verifications_ado(
-            findings_file.fix_verifications, pr_id, repo, dry_run
-        )
+        if vcs == "ado":
+            _handle_fix_verifications_ado(findings_file.fix_verifications, pr_id, repo, dry_run)
+        else:
+            _handle_fix_verifications_github(findings_file.fix_verifications, pr_id, repo, dry_run)
 
     # 10. Gate evaluation from .codereview.yml (use mode-adjusted severity for consistency with score)
     gate_config = _load_codereview_yml(workspace)
     gate_result = _evaluate_gate(score, all_adjusted, gate_config)
 
-    # 11. Post/update summary
+    # 11. Generate score comparison markdown when fix verifications are present
+    comparison_md = ""
+    if findings_file.fix_verifications:
+        comparison_md = _generate_comparison_md(score, findings_file.fix_verifications, pr_id)
+
+    # 12. Post/update summary
     summary_md = _build_summary_markdown(
         findings_file=findings_file,
         filtered_findings=capped,
         score=score,
         gate_result=gate_result,
         fix_verifications=findings_file.fix_verifications,
+        comparison_md=comparison_md,
     )
 
     if not dry_run and settings:
         try:
-            from activities.update_summary_activity import UpdateSummaryActivity, UpdateSummaryInput
-            summary_activity = UpdateSummaryActivity(settings=settings)
-            summary_activity.execute(UpdateSummaryInput(
-                pr_id=pr_id,
-                new_content=summary_md,
-                repository_id=repo or None,
-            ))
+            if vcs == "ado":
+                from activities.update_summary_activity import UpdateSummaryActivity, UpdateSummaryInput
+                summary_activity = UpdateSummaryActivity(settings=settings)
+                summary_activity.execute(UpdateSummaryInput(
+                    pr_id=pr_id,
+                    new_content=summary_md,
+                    repository_id=repo or None,
+                ))
+            else:
+                subprocess.run(
+                    ["gh", "pr", "comment", str(pr_id), "--body", summary_md, "--repo", repo],
+                    capture_output=True, text=True, check=True
+                )
         except Exception as exc:
             _eprint(f"Warning: failed to post summary: {exc}")
 
@@ -639,6 +709,7 @@ def run(
             {"cr_id": fv.cr_id, "status": fv.status, "reason": fv.reason}
             for fv in findings_file.fix_verifications
         ],
+        "has_comparison": bool(comparison_md),
     }
 
     return output

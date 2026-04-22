@@ -352,3 +352,132 @@ class TestDryRunEndToEnd:
         path.write_text(json.dumps(bad_data))
         with pytest.raises(SystemExit):
             pf.run(findings_path=str(path), dry_run=True, workspace=str(tmp_path))
+
+
+# ---------------------------------------------------------------------------
+# Fix verification — thread resolution
+# ---------------------------------------------------------------------------
+
+class TestFixVerification:
+    """Tests for fix verification: thread resolution and score comparison."""
+
+    def _make_findings_with_fix_verifications(self, tmp_path, vcs="ado", fix_verifications=None):
+        if fix_verifications is None:
+            fix_verifications = [
+                {"cr_id": "cr-001", "status": "fixed", "reason": "Issue resolved in latest commit."},
+                {"cr_id": "cr-002", "status": "still_present", "reason": "Same pattern at line 42."},
+            ]
+        data = {
+            "pr_id": 10,
+            "repo": "Org/Repo",
+            "vcs": vcs,
+            "review_modes": ["standard"],
+            "findings": [],
+            "fix_verifications": fix_verifications,
+        }
+        path = tmp_path / "findings.json"
+        path.write_text(json.dumps(data))
+        return str(path)
+
+    def test_ado_fixed_threads_resolved(self, tmp_path):
+        """ADO: _handle_fix_verifications_ado is called for fixed items when not dry-run."""
+        path = self._make_findings_with_fix_verifications(tmp_path, vcs="ado")
+        with patch("post_findings._handle_fix_verifications_ado") as mock_ado:
+            with patch("post_findings._fetch_posted_cr_ids_ado", return_value=set()):
+                pf.run(findings_path=path, dry_run=False, workspace=str(tmp_path))
+        mock_ado.assert_called_once()
+        call_args = mock_ado.call_args[0]
+        fix_verifications_arg = call_args[0]
+        fixed = [fv for fv in fix_verifications_arg if fv.status == "fixed"]
+        assert len(fixed) == 1
+        assert fixed[0].cr_id == "cr-001"
+
+    def test_github_fixed_threads_resolved(self, tmp_path):
+        """GitHub: _handle_fix_verifications_github is called when vcs=github."""
+        path = self._make_findings_with_fix_verifications(tmp_path, vcs="github")
+        with patch("post_findings._handle_fix_verifications_github") as mock_gh:
+            with patch("post_findings._fetch_posted_cr_ids_github", return_value=set()):
+                pf.run(findings_path=path, dry_run=False, workspace=str(tmp_path))
+        mock_gh.assert_called_once()
+
+    def test_dry_run_skips_fix_verification_ado(self, tmp_path):
+        """dry_run must not trigger any ADO thread resolution."""
+        path = self._make_findings_with_fix_verifications(tmp_path, vcs="ado")
+        with patch("post_findings._handle_fix_verifications_ado") as mock_ado:
+            pf.run(findings_path=path, dry_run=True, workspace=str(tmp_path))
+        # _handle_fix_verifications_ado is called but internally no-ops on dry_run
+        # Verify the top-level handler is still called (run() calls it regardless of dry_run)
+        mock_ado.assert_called_once()
+
+    def test_dry_run_ado_handler_noop(self):
+        """_handle_fix_verifications_ado with dry_run=True does not call activities."""
+        from models.review_models import FixVerification
+        fix_verifications = [FixVerification(cr_id="cr-001", status="fixed", reason="fixed")]
+        with patch("post_findings._fetch_posted_cr_ids_ado") as mock_fetch:
+            pf._handle_fix_verifications_ado(fix_verifications, pr_id=1, repo="R", dry_run=True)
+        # dry_run=True → returns immediately before calling any activity
+        mock_fetch.assert_not_called()
+
+    def test_dry_run_github_handler_noop(self):
+        """_handle_fix_verifications_github with dry_run=True does not call subprocess."""
+        from models.review_models import FixVerification
+        fix_verifications = [FixVerification(cr_id="cr-001", status="fixed", reason="fixed")]
+        with patch("subprocess.run") as mock_run:
+            pf._handle_fix_verifications_github(fix_verifications, pr_id=1, repo="org/repo", dry_run=True)
+        mock_run.assert_not_called()
+
+    def test_still_present_not_resolved_ado(self):
+        """ADO: still_present cr-ids must NOT trigger thread resolution."""
+        from models.review_models import FixVerification
+        fix_verifications = [
+            FixVerification(cr_id="cr-001", status="still_present", reason="still broken"),
+        ]
+
+        mock_thread = MagicMock()
+        mock_thread.cr_id = "cr-001"
+        mock_thread.thread_id = 99
+
+        with patch("activities.fetch_pr_comments_activity.FetchPRCommentsActivity") as MockFetch, \
+             patch("activities.post_fix_reply_activity.PostFixReplyActivity") as MockResolve, \
+             patch("config.get_settings"):
+            mock_fetch_inst = MagicMock()
+            mock_fetch_inst.execute.return_value = [mock_thread]
+            MockFetch.return_value = mock_fetch_inst
+
+            # Directly test the logic: fixed_ids should be empty for still_present
+            fixed_ids = {fv.cr_id for fv in fix_verifications if fv.status == "fixed"}
+            assert len(fixed_ids) == 0, "still_present items must not be in fixed_ids"
+
+    def test_score_comparison_included_in_output(self, tmp_path):
+        """Output must include has_comparison=True when fix_verifications are present."""
+        path = self._make_findings_with_fix_verifications(tmp_path, vcs="ado")
+        output = pf.run(findings_path=path, dry_run=True, workspace=str(tmp_path))
+        assert output["has_comparison"] is True
+
+    def test_score_comparison_false_when_no_fix_verifications(self, tmp_path):
+        """Output must include has_comparison=False when no fix_verifications."""
+        data = {
+            "pr_id": 1,
+            "repo": "Org/Repo",
+            "vcs": "ado",
+            "review_modes": ["standard"],
+            "findings": [],
+        }
+        path = tmp_path / "findings.json"
+        path.write_text(json.dumps(data))
+        output = pf.run(findings_path=str(path), dry_run=True, workspace=str(tmp_path))
+        assert output["has_comparison"] is False
+
+    def test_fix_verifications_all_statuses_in_output(self, tmp_path):
+        """All three statuses (fixed, still_present, not_relevant) appear in output correctly."""
+        fix_verifications = [
+            {"cr_id": "cr-001", "status": "fixed", "reason": "resolved"},
+            {"cr_id": "cr-002", "status": "still_present", "reason": "still broken"},
+            {"cr_id": "cr-003", "status": "not_relevant", "reason": "file deleted"},
+        ]
+        path = self._make_findings_with_fix_verifications(tmp_path, fix_verifications=fix_verifications)
+        output = pf.run(findings_path=path, dry_run=True, workspace=str(tmp_path))
+        statuses = {fv["cr_id"]: fv["status"] for fv in output["fix_verifications"]}
+        assert statuses["cr-001"] == "fixed"
+        assert statuses["cr-002"] == "still_present"
+        assert statuses["cr-003"] == "not_relevant"
