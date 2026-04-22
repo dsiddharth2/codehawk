@@ -95,10 +95,10 @@
       "id": 11,
       "step": "Dockerfile + entrypoint.sh + docker-compose",
       "type": "work",
-      "status": "pending",
+      "status": "completed",
       "tier": "standard",
       "commit": "",
-      "notes": ""
+      "notes": "Created Dockerfile: node:22-slim base, installs python3/venv/pip/git/curl/jq/ripgrep/gh CLI via apt, npm installs @openai/codex + repomix, python venv at /opt/venv with project deps, copies src/commands/templates/AGENTS.md/entrypoint.sh, sets PYTHONPATH=/app/src, workdir /workspace. Created entrypoint.sh: validates PR_ID/REPO/VCS/AGENT env vars, mkdir .cr, Phase 1 dispatch (codex/claude/gemini via $AGENT with --sandbox=none for codex), verifies findings.json produced and valid JSON, Phase 2 runs post_findings.py. Created docker-compose.yml for local dev with env var passthrough and volume mounts."
     },
     {
       "id": 12,
