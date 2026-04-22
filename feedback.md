@@ -1,106 +1,192 @@
-# Code Reviewer v3.1 — Plan Review (Re-review)
+# Code Reviewer v3.1 — Phase 1 Code Review
 
 **Reviewer:** local-codehawk-reviewer
-**Date:** 2026-04-22 12:15:00+05:30
-**Verdict:** APPROVED
+**Date:** 2026-04-22 14:30:00+05:30
+**Verdict:** CHANGES NEEDED
 
-> See the recent git history of this file to understand the context of this review. Prior review (270a03e) flagged 6 must-fix and 4 should-fix items. Doer addressed all 10 in commit f914966. This re-review verifies each resolution.
-
----
-
-## Prior Finding Resolution
-
-### Must-fix items
-
-**1. Split Task 2 into models+config and activities — RESOLVED.**
-PLAN.md now has Task 2 (Port models + config, 2 files, standard tier) and Task 3 (Port activities, 8 files, standard tier). The split is clean — Task 2 handles the data layer (models + config), Task 3 handles the VCS layer (activities). Task 3 correctly depends on Task 2 ("models + config must exist for activity imports"). Each is a single-session unit. Phase 1 now has 4 work tasks instead of 3, which is a minor deviation from the 2-3 guideline but acceptable since Tasks 1 and 2 are small.
-
-**2. Fix Task 21 dependency to Phase 5 — RESOLVED.**
-Task 21 (GitHub path) now declares: "Blockers: Phase 5 (fix verification logic must be in post_findings.py before extending GitHub path)". Change description explicitly includes fix verification for GitHub: "reply with 'Fixed', optionally minimize via GraphQL". Rate-limit retry also added (ties to R9). Correct.
-
-**3. Account for markdown_formatter.py — RESOLVED.**
-Added to Task 1 files list and done criteria. Task 7 references it for summary formatting. DEFERRED section notes "advanced formatting deferred" while base version is Sprint 1. Clean resolution.
-
-**4. Add .codereview.yml parsing to a specific task — RESOLVED.**
-Added to Task 7 (post_findings.py) as step 9: "read `.codereview.yml` from workspace if present — extract gate thresholds (min_star_rating, fail_on_critical) and apply them to the CI gating output". Done criteria updated. Unit test coverage added in Task 8. Complete.
-
-**5. Add docs/chore mode — RESOLVED.**
-Task 14 creates `commands/review-mode-docs-chore.md` with spec: "doc accuracy, changelog completeness, config correctness, no functional logic — light-touch review that skips deep code analysis". Task 15 adds docs/chore detection rules to the prompt ("only .md/.yml/.json files changed, PR label 'docs' or 'chore'"). Done criteria for both tasks reference docs/chore. All 6 modes from requirements are now in Sprint 1 (4 in Sprint 1 tasks + 2 deferred in Phase 7).
-
-Wait — re-checking: requirements list 6 modes: standard, security, architecture, performance, migration, docs/chore. Sprint 1 implements 4: standard, security, migration, docs/chore. Phase 7 (deferred) has architecture + performance. That's 4 + 2 = 6. Correct.
-
-**6. Add missing items to DEFERRED — RESOLVED.**
-New "Deferred Utilities" section includes `comment_exporter.py`. Phase 10 now explicitly lists `README.md`. Both gaps closed.
-
-### Should-fix items
-
-**7. Strengthen Task 10 done criteria — RESOLVED.**
-Task 10 done criteria now reads: "Prompt contains all 7 numbered steps; includes 'max 30 findings', 'max 5 per file', 'max 40 tool calls' constraints verbatim; references `commands/findings-schema.json` by path; has VCS-conditional blocks (ADO vs GitHub) in Steps 2, 5, and 6; scoring.md has complete penalty matrix with all severity levels and categories." This is specific and mechanically verifiable. Two developers would produce equivalent outputs against these criteria.
-
-**8. Strengthen Task 12 done criteria — RESOLVED.**
-Task 12 now has three-tier done criteria: (1) `docker build` succeeds (hard gate), (2) dry-run with `tests/fixtures/sample_findings.json` inside container produces valid structured JSON (hard gate), (3) live PR test is stretch goal. The sample fixture file is also listed in the Files section. No ambiguity remains.
-
-**9. Add three missing risks to register — RESOLVED.**
-R9 (GitHub API rate limiting, Medium, Phase 6) — mitigated by retry-with-backoff in Task 21. R10 (Docker image size 2GB+, Medium, Phase 3) — mitigated by tracking in Phase 3 VERIFY, optimization in Phase 9. R11 (Schema drift, Medium, Phase 2) — mitigated by schema validation in Task 7. Each risk is cross-referenced to the task that implements its mitigation. Complete.
-
-**10. Clarify AGENTS.md/CLAUDE.md content — RESOLVED.**
-Task 12 change description now specifies: "explain two-phase architecture, instruct agent to read `commands/review-pr-core.md` as its primary directive, list available tools (`python vcs.py`, `gh`, `rg`, `repomix`), specify output location (`/workspace/.cr/findings.json`), include constraint reminders (40 tool calls, no posting)". Done criteria mirror this. No ambiguity.
+> See the recent git history of this file to understand the context of this review. Prior reviews covered plan quality (270a03e, eb70426). This is the first code review, covering all code on `feat/code-reviewer-v3` since `main` — commits 9b5cc4d through 1dcf868 (Tasks 1–5).
 
 ---
 
-## Re-review Against 12 Criteria
+## 1. Plan Alignment — Task 1: Project scaffold + pyproject.toml + utilities
 
-### 1. Done Criteria Clarity — PASS
-All tasks now have concrete, verifiable done criteria. The two previously weak tasks (now Tasks 10 and 12) have been strengthened with specific required elements.
+### Directory Structure — FAIL
 
-### 2. Cohesion and Coupling — PASS
-Task 2 split resolved the low-cohesion issue. Each task now has a single responsibility: Task 1 (scaffold + utilities), Task 2 (data models + config), Task 3 (VCS activities), Task 4 (scoring).
+PLAN.md specifies creating `commands/`, `templates/`, and `ci/` directories. These directories do not exist on disk or in git. Git does not track empty directories, but the plan lists them as deliverables. The `commands/` directory is particularly important since Phase 2 (Task 7) creates `commands/findings-schema.json` inside it.
 
-### 3. Key Abstractions Early — PASS
-No change from prior review. Finding/FindingsFile, Settings, activity base class, and scorer are all established in Phase 1.
+**Files verified present:** `src/__init__.py`, `src/activities/__init__.py`, `src/models/__init__.py`, `src/utils/__init__.py`, `tests/__init__.py` — all exist. PASS.
 
-### 4. Riskiest Assumption Validated Early — PASS
-No change. R3 (post_findings.py) in Phase 2, R1 (Codex sandbox) in Phase 3 smoke test.
+### pyproject.toml — FAIL
 
-### 5. DRY / Reuse — PASS
-No change. `markdown_formatter.py` is now explicitly ported in Task 1 and consumed by Task 7, which strengthens this.
+The file parses as valid TOML. Dependencies match the plan (`azure-devops>=7.1,<8.0`, `pydantic>=2.0`, `pydantic-settings>=2.0`, `msrest`). Dev deps include `pytest` and `pytest-mock`. PASS on content.
 
-### 6. Phase Structure — PASS (with note)
-Phase 1 now has 4 work tasks + VERIFY (was 3+1). This exceeds the 2-3 guideline. Acceptable because Tasks 1 (cheap) and 2 (standard, 2 files) are small — the 4-task phase is lighter than many 3-task phases. All other phases remain at 2-3 work + VERIFY.
+However, the build backend is set to `setuptools.backends.legacy:build`, which does not exist. The correct value is `setuptools.build_meta`. This will cause `pip install -e .` and any PEP 517 build to fail — directly blocking Phase 11 (local CLI) and potentially Phase 3 (Docker `pip install`).
 
-### 7. Single-Session Completability — PASS
-The Task 2 split resolved the only concern. All tasks are now appropriately sized for their tier.
+### Utility Modules — PASS
 
-### 8. Dependencies Satisfied in Order — PASS
-Task 21's dependency corrected to Phase 5. All other dependencies were already correct. Verified: Task 3 → Task 2 → Task 1 chain is clean. Task 7 → Tasks 4, 6. Task 15 → Tasks 7, 10, 14 (cross-phase but correct).
-
-### 9. Vague Tasks — PASS
-Task 10 and Task 12 (previously Tasks 7 and 9) now have specific, unambiguous done criteria. Task 12 also specifies AGENTS.md/CLAUDE.md content.
-
-### 10. Hidden Dependencies — PASS
-All three previously hidden dependencies resolved: markdown_formatter.py in Task 1, .codereview.yml parsing in Task 7, comment_exporter.py in DEFERRED. No new hidden dependencies found.
-
-### 11. Risk Register — PASS
-11 risks now, up from 8. All three flagged risks added with severity, phase, and mitigation cross-referenced to implementation tasks.
-
-### 12. Alignment with Requirements — PASS
-All 6 review modes accounted for (4 Sprint 1 + 2 deferred Phase 7). docs/chore no longer dropped. All 8 functional requirements from requirements.md are addressed in Sprint 1 except local CLI (correctly deferred to Phase 11).
+- `src/utils/logger.py` — Ported with JSON and text formatters, optional coloredlogs. Clean.
+- `src/utils/url_sanitizer.py` — Ported as-is with credential redaction. Clean.
+- `src/utils/markdown_formatter.py` — Ported with summary formatting using `PRReviewJobResult`, `PRScore`, etc. Imports resolve against new model locations. Clean.
 
 ---
 
-## Structural Verification
+## 2. Plan Alignment — Task 2: Port models + config
 
-- **progress.json task count:** 23 entries, sequential IDs 1-23. Correct.
-- **Work vs verify split:** 17 work + 6 verify = 23. Correct.
-- **PLAN.md ↔ progress.json alignment:** Each progress.json entry matches the corresponding PLAN.md task/verify by name and tier. Verified all 23.
-- **Tier distribution:** 3 cheap, 12 standard, 2 premium. Reasonable — premium reserved for the two highest-complexity items (post_findings.py and review-pr-core.md).
+### review_models.py — PASS
+
+All required dataclasses present:
+- **Finding**: 9 fields (`id`, `file`, `line`, `severity`, `category`, `title`, `message`, `confidence`, `suggestion`). Matches findings.json schema intent.
+- **FixVerification**: 3 fields (`cr_id`, `status`, `reason`). Correct.
+- **FindingsFile**: 8 fields (`pr_id`, `repo`, `vcs`, `review_modes`, `findings`, `fix_verifications`, `tool_calls`, `agent`). Correct.
+- Legacy models preserved: `ReviewComment`, `ReviewResult`, `PRScore`, `ExistingCommentThread`, `CommentMatchResult`, `FixVerificationResult`, `ScoreComparison`, `FileChange`, `PullRequestDetails`, plus input models. All needed by ported activities and scorer.
+
+### config.py — PASS
+
+- OpenAI/AI fields: None found. Verified by inspecting all field names — no `openai`, `gpt`, or `ai_model` references. PASS.
+- VCS field: Present as `Literal["ado", "github"]`, default `"ado"`. PASS.
+- GH_TOKEN field: Present as `gh_token: Optional[str]`. PASS.
+- ADO auth: `azure_devops_org`, `azure_devops_project`, `azure_devops_pat`, `azure_devops_system_token`, `azure_devops_repo`, `auth_mode`. PASS.
+- Penalty matrix: All 5 categories × 3 severities configured with `get_penalty_matrix()`. PASS.
+- Star thresholds: 5 thresholds with `get_star_thresholds()`. PASS.
+- Token resolution: `get_azure_devops_token()` correctly implements auto/pat/system_token modes. PASS.
+
+**NOTE:** Pydantic deprecation warning observed — `model_fields` accessed on instance instead of class (`src/config.py`). This is a Pydantic v2.11 deprecation; not blocking but should be addressed before Pydantic v3.
+
+---
+
+## 3. Plan Alignment — Task 3: Port activities
+
+### All 8 activities import — PASS
+
+Verified: `BaseActivity`, `FetchPRDetailsActivity`, `FetchPRCommentsActivity`, `PostPRCommentActivity`, `PostFixReplyActivity`, `FetchFileContentActivity`, `FetchFileDiffActivity`, `UpdateSummaryActivity` — all import successfully with `PYTHONPATH=src`.
+
+### cr-id extraction in FetchPRCommentsActivity — PASS
+
+`_extract_cr_id()` at `src/activities/fetch_pr_comments_activity.py:134` uses regex `r'<!--\s*cr-id:\s*(\S+)\s*-->'`. Tested against 4 variations including no marker, no whitespace, and extra whitespace — all pass. The extracted `cr_id` is stored in the `ExistingCommentThread.cr_id` field. Correct.
+
+### cr-id injection in PostPRCommentActivity — PASS
+
+`_post_line_comment()` at `src/activities/post_pr_comment_activity.py:127` injects `<!-- cr-id: {cr_id} -->` when `cr_id` parameter is provided. The `_post_thread_comments()` method extracts `cr_id` from `ReviewComment.id` via `getattr(review_comment, 'id', None)` and passes it through. Round-trip verified: injected marker is extractable by the fetch regex.
+
+### Activity patterns — PASS
+
+All activities follow consistent patterns:
+- Inherit from `BaseActivity`
+- Accept `Settings` in constructor with `get_settings()` fallback
+- Use `_log_start`, `_log_success`, `_log_error` consistently
+- Establish ADO connection in `__init__`
+- Handle errors with appropriate logging
+
+### UpdateSummaryActivity marker — PASS
+
+Uses `SUMMARY_MARKER = "<!-- codehawk-summary -->"` at module level. New summaries inject this marker. Lookup checks for it plus legacy markers (`"AI Code Review"`, `"Code Review Summary"`, etc.) for backward compatibility. Correct design.
+
+---
+
+## 4. Plan Alignment — Task 4: Port pr_scorer + score_comparison
+
+### PRScorer — PASS
+
+- `calculate_pr_score()` accepts `List[Finding]` (not `List[ReviewResult]`). PASS.
+- Penalty matrix lookup, star thresholds, quality levels, breakdown generation — all functional. PASS.
+
+### Mode Multipliers — PASS
+
+`apply_mode_multipliers()` verified against all 4 modes:
+- **Security mode**: security warnings → critical (×2 effect). PASS.
+- **Performance mode**: performance warnings → critical (×2 effect). PASS.
+- **Architecture mode**: best_practices/architecture suggestions → warning (×1.5 effect). PASS.
+- **Migration mode**: all findings → critical. PASS.
+
+Method correctly creates new `Finding` objects via `dataclasses.replace()` — no mutation of originals.
+
+### ScoreComparisonService — PASS
+
+- `generate_comparison()` works with `PRScore` objects. PASS.
+- `summarize_fix_verifications()` works with `List[FixVerification]` from new model. PASS.
+- `format_as_markdown()` handles both new `FixVerification[]` and legacy `FixVerificationResult`. PASS.
+- Markdown output includes score comparison, fix summary with percentages, and collapsible details sections. PASS.
+
+---
+
+## 5. Import Verification
+
+```
+PYTHONPATH=src python -c "from activities.fetch_pr_details_activity import FetchPRDetailsActivity; \
+from models.review_models import Finding, FindingsFile; from pr_scorer import PRScorer; \
+from config import Settings; print('All imports OK')"
+→ All imports OK
+```
+
+**PASS** — All specified imports resolve.
+
+---
+
+## 6. Test Suite
+
+```
+PYTHONPATH=src python -m pytest tests/ -v
+→ collected 0 items, no tests ran (exit code 5)
+```
+
+**PASS** — 0 tests expected at Phase 1. No import errors, no collection failures. pytest discovers the test directory correctly via `pyproject.toml` configuration.
+
+---
+
+## 7. Security Review — PASS
+
+- No hardcoded secrets, tokens, or API keys in any source file.
+- `url_sanitizer.py` correctly redacts sensitive keys and bearer tokens.
+- `BaseActivity._log_error()` passes kwargs through `sanitize_sensitive_data()` before logging.
+- Config loads tokens from environment variables only, with appropriate `Optional[str]` types.
+- No SQL, no user-facing input parsing, no web endpoints — attack surface is minimal at this phase.
+
+---
+
+## 8. Code Quality
+
+### Consistent patterns — PASS
+
+All activities follow the same structural pattern. Naming conventions are consistent (`snake_case` for functions, `PascalCase` for classes). Import style is uniform.
+
+### Dead code from old codebase — NOTE
+
+`review_models.py` carries several legacy models (`ReviewResult`, `PRReviewJobResult`, `CommentMatchResult`, `FixVerificationResult`) that are used by the ported `markdown_formatter.py` and `score_comparison.py`. These are not dead code — they're actively referenced. However, `ReviewPRInput` at `src/models/review_models.py:82` appears unused by any Phase 1 code. Not blocking — it may be consumed by future phases.
+
+### FetchFileDiffActivity diff direction — NOTE
+
+`_create_simple_diff()` at `src/activities/fetch_file_diff_activity.py:148` passes arguments to `unified_diff` as `(target_lines, source_lines)` — meaning the diff shows changes FROM target TO source, which is the reverse of the typical convention (old → new). This is inherited from the old codebase. If the consuming code expects this direction, it's correct; if not, diffs will show additions as deletions and vice versa. Worth verifying in Phase 2 integration.
+
+### _populate_diff_details stub — NOTE
+
+`FetchPRDetailsActivity._populate_diff_details()` at `src/activities/fetch_pr_details_activity.py:167` sets `changed_lines = [(1, 9999)]` and hardcodes `additions=1` / `deletions=0|1` for all files. This is a placeholder that doesn't compute real line-level diff stats. Acceptable for Phase 1 since the actual diff is fetched by `FetchFileDiffActivity`, but the `total_additions` / `total_deletions` on `PullRequestDetails` will be inaccurate. The agent uses VCS tools directly, so this is unlikely to cause issues in practice.
+
+---
+
+## 9. Must-Fix Issues
+
+### 9.1 pyproject.toml build backend — FAIL
+
+**File:** `pyproject.toml:3`
+**Issue:** `build-backend = "setuptools.backends.legacy:build"` — this module path does not exist in setuptools (verified: `ModuleNotFoundError` on import). The correct value is `setuptools.build_meta`.
+**Impact:** Any PEP 517 build (`pip install -e .`, `pip wheel .`, `python -m build`) will fail. Blocks Phase 3 Docker build and Phase 11 local CLI.
+**Fix:** Change to `build-backend = "setuptools.build_meta"`.
+
+### 9.2 Missing directories — FAIL
+
+**Issue:** `commands/`, `templates/`, `ci/` directories specified in PLAN.md Task 1 do not exist. Git cannot track empty directories.
+**Impact:** Phase 2 (Task 7) creates `commands/findings-schema.json` — that task will need to create the directory. Not a runtime blocker for Phase 1, but it means Task 1's "done when" criteria are not fully met.
+**Fix:** Add `.gitkeep` files to `commands/`, `templates/`, `ci/` so git tracks them, or create them now and accept they'll appear with the first file added. Either way, the scaffold promise should be honored.
 
 ---
 
 ## Summary
 
-All 6 must-fix and 4 should-fix items from the prior review have been adequately addressed. The plan is now internally consistent, complete against requirements, and ready for implementation.
+**Phase 1 delivers a solid foundation.** All 8 activities port cleanly with correct import paths. The new `Finding`/`FindingsFile`/`FixVerification` models are well-structured. Config correctly strips OpenAI fields and adds VCS/GH_TOKEN. cr-id extraction and injection are correct and round-trip tested. Mode multipliers work as specified. Score comparison handles both new and legacy data structures.
 
-**Approved for Sprint 1 execution (Phases 1-6, Tasks 1-23).**
+**Two issues require changes:**
 
-One advisory note for the doer: Phase 1 now has 4 work tasks — consider whether the Phase 1 VERIFY should include extra import-chain validation since the models+config and activities are split across two tasks (Task 2 and Task 3) rather than validated together.
+1. **pyproject.toml build backend** (`setuptools.backends.legacy:build` → `setuptools.build_meta`) — will break all PEP 517 builds.
+2. **Missing scaffold directories** (`commands/`, `templates/`, `ci/`) — plan deliverable not met.
+
+Both are quick fixes. Once addressed, Phase 1 is ready for approval.
