@@ -1,79 +1,147 @@
 # Graph Integration — Code Review
 
 **Reviewer:** local-codehawk-reviewer
-**Date:** 2026-04-28 12:00:00+05:30
-**Verdict:** APPROVED
+**Date:** 2026-04-28 17:30:00+05:30
+**Verdict:** CHANGES NEEDED
 
-> First review of Phase 1 (Tasks 1-3). No prior feedback.md history.
-
----
-
-## 1. Dependency Addition (Task 1) — PASS
-
-`code-review-graph>=2.3,<3.0` is present in all three required files:
-
-- `requirements.txt` line 5
-- `pyproject.toml` line 15 (in `dependencies` array)
-- `Dockerfile` line 29 (in `pip install --no-cache-dir` block)
-
-The package exists on PyPI — latest is 2.3.2, which satisfies the version range. Installed and verified locally. The version range `>=2.3,<3.0` is appropriate: pins to the known-good major version while allowing patch updates.
-
-**NOTE:** `openai` and `jsonschema` appear in the Dockerfile's `pip install` but are absent from `requirements.txt` and `pyproject.toml`. This is a pre-existing inconsistency, not introduced by Phase 1. Recommend addressing in a future task.
+> See the recent git history of this file to understand the context of this review.
+> Prior review: Phase 1 (Tasks 1-3) was APPROVED on 2026-04-28 12:00.
 
 ---
 
-## 2. Config Setting (Task 2) — PASS
+## 1. Graph Tools — `src/tools/graph_tools.py` (Task 5)
 
-`enable_graph: bool = Field(default=True, description="...")` added to `Settings` class at `src/config.py:103-106`, after `log_format`. Follows the existing `Field()` pattern used by all other settings.
+### 1a. Registration Pattern — PASS
 
-`ENABLE_GRAPH=${ENABLE_GRAPH:-1}` added to `docker-compose.yml:38` in the "Optional" section, consistent with the `DRY_RUN` and `COMMIT_ID` pattern.
+`register_graph_tools(registry, workspace, graph_store, changed_files)` follows the exact pattern from `workspace_tools.py` and `vcs_tools.py`:
+- Signature accepts `ToolRegistry` as first arg
+- Imports `Tool, ToolRegistry` from `tools.registry`
+- Uses inner handler functions with `registry.register(Tool(...))` calls
+- 4 tools registered: `get_blast_radius`, `get_callers`, `get_dependents`, `get_change_analysis`
 
-Verified that Pydantic coerces `ENABLE_GRAPH=1` to `True` and `ENABLE_GRAPH=0` to `False` correctly.
+### 1b. Tool Schemas — PASS
 
-**NOTE (minor):** `enable_graph` is positioned inside the "Logging Configuration" comment block, but it's a feature toggle, not a logging setting. The plan explicitly specified this location so this is plan-compliant, but a future cleanup could move it under its own "# Graph Configuration" comment or near `enable_pr_scoring`.
+All 4 schemas match the OpenAI function-calling format used in `vcs_tools.py`:
+- `description` (string) and `parameters` (object with `properties` and `required`)
+- `get_blast_radius`: `changed_files` (array of strings, required) — correct
+- `get_callers`: `function_name` (string, required), `file_path` (string, optional), `max_depth` (integer, optional) — correct
+- `get_dependents`: `file_path` (string, required) — correct
+- `get_change_analysis`: `changed_files` (array of strings, required) — correct
+
+All parameter types match PLAN.md specification.
+
+### 1c. Error Handling — PASS
+
+All 4 handlers wrap their logic in `try/except Exception` and return `json.dumps({"error": str(e)})` on failure. This matches the plan requirement and is consistent with error handling in `workspace_tools.py` (e.g., `read_local_file` handler lines 72-73).
+
+### 1d. `max_depth` Parameter Declared But Unused — FAIL
+
+`get_callers` declares `max_depth` in its schema (line 126-128) but the handler at lines 78-97 never reads `args.get("max_depth")`. The handler always does depth-1 traversal regardless of what the agent passes.
+
+This is a functional gap: the agent may pass `max_depth=3` expecting transitive callers and get only direct callers. Either:
+1. Implement depth traversal (query callers of callers up to `max_depth`), or
+2. Remove `max_depth` from the schema so the agent doesn't send a value that gets silently ignored
+
+Option 2 is simpler and honest. The plan listed it as "optional, default 1" which suggests depth-1 was the intended behavior — so removing it from the schema is the cleaner fix.
+
+### 1e. `get_dependents` Edge Query Strategy — NOTE
+
+`handle_get_dependents` (lines 142-162) first queries by exact target path, then falls back to `search_edges_by_target_name`. The `edge.file_path` attribute (line 157) is used for grouping — this assumes `file_path` exists on the edge object. If the `code-review-graph` API returns edges without `file_path`, this will hit the `except` clause and return an error. Since the graph store API is external and was adapted by the doer from real inspection, this is acceptable but worth noting.
+
+### 1f. Security — PASS
+
+No shell execution, no path traversal outside workspace, no secrets. All inputs are strings passed to the graph store API which operates on a local SQLite database. `file_path.lstrip("/")` in `get_dependents` prevents absolute path injection.
 
 ---
 
-## 3. Graph Builder (Task 3) — PASS
+## 2. Runner Wiring — `src/agents/openai_runner.py` (Task 6)
 
-`src/graph_builder.py` (60 lines) implements `build_graph(workspace: Path) -> Optional[Any]` with all required defensive patterns:
+### 2a. Constructor Params — PASS
 
-- **Config check first:** Returns `None` immediately when `enable_graph=False` (line 33-34)
-- **Lazy imports:** All `code_review_graph` imports are inside the inner `_build()` function (lines 38-40), not at module level
-- **Import paths verified:** `code_review_graph.tools.build.build_or_update_graph`, `code_review_graph.graph.GraphStore`, `code_review_graph.incremental.get_db_path` — all confirmed to exist and have matching signatures
-- **Function signatures match:** `build_or_update_graph(full_rebuild=True, repo_root=str, postprocess="minimal")` is valid per the real API
-- **Timeout guard:** Uses `ThreadPoolExecutor` with 30s timeout (line 14, 55-58) — handles `TimeoutError` gracefully
-- **Exception handling:** `ImportError` and generic `Exception` both return `None` with diagnostic print (lines 44-49)
-- **Defensive coding pattern:** Consistent with `_load_codereview_yml()` in `post_findings.py` — try/except with fallback, diagnostic messages on failure
+`__init__` accepts `graph_store=None` and `changed_files=None` as optional keyword arguments (lines 75-76). These default to `None`, which means existing callers are not affected.
 
-**Security check:** No injection vectors, no secrets, no shell execution, no network calls beyond what the library does internally. The `str(workspace)` conversion is safe.
+### 2b. Conditional Registration — PASS
 
----
+Lines 91-93: `if graph_store is not None:` — correct guard. Uses lazy import (`from tools.graph_tools import register_graph_tools`) inside the conditional, matching the pattern from `graph_builder.py`. Passes `changed_files or []` to handle `None`.
 
-## 4. Test Results
+Registration happens after `register_workspace_tools` (line 90), which matches the plan: "After `register_workspace_tools` call, add conditional graph tool registration."
 
-**Unit tests:** 84 passed, 2 failed (pre-existing)
-**Integration tests:** 11 failed (pre-existing — all due to missing `suggestion` field in test fixtures, unrelated to Phase 1)
+### 2c. SYSTEM_PROMPT Update — PASS
 
-The 2 unit test failures (`TestDryRunEndToEnd::test_gate_passes_with_no_criticals`, `TestGitHubPath::test_github_dry_run_produces_valid_output`) and the 11 integration test failures were verified to exist before the Phase 1 commit. They fail on schema validation (`'suggestion' is a required property`) in `post_findings.py` test fixtures — a pre-existing issue from Sprint 1.
+Lines 33-41 add the 4 graph tool mappings and the fallback note. The text matches the plan specification exactly:
+- `get_change_analysis` → risk scores + review priorities
+- `get_blast_radius` → all affected files/functions/tests
+- `get_callers` → precise structural results (instead of `search_code`)
+- `get_dependents` → files importing a module
+- Fallback note about graph tools only being available when graph was built successfully
 
-**No regressions introduced by Phase 1.**
+**NOTE:** The graph tool lines are present in the SYSTEM_PROMPT unconditionally — even when `graph_store is None` and no graph tools are registered. The agent will see instructions about tools that don't exist. This is low-severity because the fallback note tells it to use `search_code` if graph tools return errors, and the agent won't see them in its tool list. But it adds noise to the prompt. Consider making the graph section conditional in a future cleanup — not blocking.
 
 ---
 
-## 5. Pattern Consistency — PASS
+## 3. ReviewJob Wiring — `src/review_job.py` (Task 7)
 
-- `graph_builder.py` uses `print()` for diagnostics, matching `openai_runner.py` convention (stdout diagnostics)
-- The plan specified matching `_load_codereview_yml()` which uses `_eprint()` (stderr). The doer chose `print()` (stdout) instead. Both are acceptable — the plan's "pattern reference" was a guideline, and the doer matched the convention used in the module that will call `graph_builder.py` (i.e., `review_job.py` / `openai_runner.py` which use stdout prints).
+### 3a. Graph Build Placement — PASS
+
+Lines 74-80: Graph build is inserted between `self._build_prompt()` (line 72) and `OpenAIAgentRunner` construction (line 82). This matches the plan exactly.
+
+### 3b. Best-Effort Pattern — PASS
+
+The `try/except Exception` block (lines 75-80) catches any failure and prints a diagnostic, falling back to `graph_store = None`. This is correct — a failed graph build should not block the review.
+
+### 3c. `changed_files=[]` Hardcoded — NOTE
+
+Line 89: `changed_files=[]` is always empty. The plan acknowledged this: "Graph tools accept `changed_files` as explicit parameter; agent passes them after `get_pr`." The agent itself will pass changed files as tool arguments at runtime, so this empty default is correct for construction time. The graph tools receive `changed_files` via their closure from `register_graph_tools`, but `get_blast_radius` and `get_change_analysis` take `changed_files` as explicit handler arguments — so the empty construction-time list is unused by those tools. No bug here.
+
+---
+
+## 4. Phase 1 Regression Check
+
+Re-checked all Phase 1 files against the current branch head:
+
+- `src/graph_builder.py` — unchanged from Phase 1 approval (60 lines, same content)
+- `src/config.py` — `enable_graph` field still present, unchanged
+- `requirements.txt` — `code-review-graph>=2.3,<3.0` still present
+- `pyproject.toml` — dependency still present
+- `Dockerfile` — dependency still present
+- `docker-compose.yml` — `ENABLE_GRAPH` env var still present
+
+**No Phase 1 regressions.**
+
+---
+
+## 5. Test Results
+
+```
+84 passed, 13 failed, 8 skipped (21.62s)
+```
+
+All 13 failures are pre-existing (`'suggestion' is a required property` in test fixtures) — same failures documented in Phase 1 review. The count breakdown:
+- 2 unit test failures: `test_gate_passes_with_no_criticals`, `test_github_dry_run_produces_valid_output`
+- 11 integration test failures: all in `test_ado_pr_review.py`
+
+**No new test failures introduced by Phase 2.**
+
+---
+
+## 6. Pattern Consistency — PASS
+
+- `graph_tools.py` follows the same module structure as `workspace_tools.py` and `vcs_tools.py` (module docstring, imports, single `register_*` function with inner handlers)
+- Handler functions use `args["key"]` for required params and `args.get("key")` for optional — consistent with existing tools
+- JSON serialization uses `json.dumps()` throughout — consistent
+- Diagnostic `print()` statements in `review_job.py` match the stdout convention used elsewhere in the pipeline
 
 ---
 
 ## Summary
 
-Phase 1 is complete and correct. All three tasks implemented as specified in PLAN.md:
+**Phase 2 is substantially correct but has one must-fix item:**
 
-1. Dependency added to all three files with correct version range, verified on PyPI
-2. Config setting follows existing patterns, env var coercion verified
-3. Graph builder implements all defensive coding requirements (lazy import, timeout, graceful None return, config check)
+1. **MUST FIX — `max_depth` unused in `get_callers`** (Section 1d): The schema declares `max_depth` but the handler ignores it. Remove `max_depth` from the schema to avoid misleading the agent. (If multi-depth traversal is desired, that's a Phase 3+ enhancement.)
 
-No regressions. Two minor notes logged (dependency inconsistency pre-existing, config field placement) — neither blocks approval.
+**Non-blocking notes:**
+- SYSTEM_PROMPT graph tool instructions are unconditional (always shown even when graph is absent) — cosmetic, defer to Phase 3+
+- `get_dependents` assumes `edge.file_path` exists on edge objects — acceptable given API was discovered empirically
+- `changed_files=[]` at construction time is correct by design
+
+Phase 1 code has not regressed. No new test failures.
