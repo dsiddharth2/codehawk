@@ -34,7 +34,11 @@ All parameter types match PLAN.md specification.
 
 All 4 handlers wrap their logic in `try/except Exception` and return `json.dumps({"error": str(e)})` on failure. This matches the plan requirement and is consistent with error handling in `workspace_tools.py` (e.g., `read_local_file` handler lines 72-73).
 
-### 1d. `max_depth` Parameter Declared But Unused — FAIL
+### 1d. `max_depth` Parameter Declared But Unused — FIXED
+
+**Doer:** fixed in commit 9979d9b — removed `max_depth` from `get_callers` schema; handler always does depth-1 traversal and GraphStore has no depth param for CALLS lookup, so the schema param was misleading.
+
+### 1d. Original Finding
 
 `get_callers` declares `max_depth` in its schema (line 126-128) but the handler at lines 78-97 never reads `args.get("max_depth")`. The handler always does depth-1 traversal regardless of what the agent passes.
 

@@ -113,10 +113,6 @@ def register_graph_tools(
                         "type": "string",
                         "description": "File path containing the function (optional, improves precision)",
                     },
-                    "max_depth": {
-                        "type": "integer",
-                        "description": "Maximum call-graph depth to traverse. Default 1.",
-                    },
                 },
                 "required": ["function_name"],
             },
