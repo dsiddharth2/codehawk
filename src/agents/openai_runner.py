@@ -32,6 +32,13 @@ IMPORTANT tool mapping — use these tools instead of shell commands:
 - Instead of `cat /workspace/<file>` → use the `read_local_file` tool
 - Instead of `git blame <file>` → use the `git_blame` tool
 - Instead of `git diff` between commits → use the `get_file_diff` tool
+- To understand change impact → use `get_change_analysis` (risk scores + review priorities)
+- To find blast radius of changes → use `get_blast_radius` (all affected files/functions/tests)
+- Instead of `search_code("fn_name")` for callers → use `get_callers` (precise structural results)
+- To find files importing a module → use `get_dependents`
+
+Note: Graph tools are only available when the codebase graph was built successfully. \
+If a graph tool returns an error, fall back to `search_code` or `read_local_file`.
 
 When you have completed your review, output the findings JSON as your final message. \
 Do NOT attempt to write files — just output the JSON directly in a ```json code fence. \
@@ -65,6 +72,8 @@ class OpenAIAgentRunner:
         model: str = "o3",
         pr_id: int = 0,
         repo: str = "",
+        graph_store=None,
+        changed_files=None,
     ):
         self.settings = settings
         self.workspace = Path(workspace)
@@ -83,6 +92,9 @@ class OpenAIAgentRunner:
             default_repo=repo,
         )
         register_workspace_tools(self.registry, workspace=self.workspace)
+        if graph_store is not None:
+            from tools.graph_tools import register_graph_tools
+            register_graph_tools(self.registry, self.workspace, graph_store, changed_files or [])
 
     def run(self, prompt: str, max_turns: int = 40) -> AgentResult:
         result = AgentResult()

@@ -66,12 +66,24 @@ class ReviewJob:
         """Run the agent and write findings.json. Returns the path."""
         prompt = self._build_prompt()
 
+        # Phase 0: Build code graph (best-effort)
+        graph_store = None
+        try:
+            from graph_builder import build_graph
+            graph_store = build_graph(self.config.workspace)
+            if graph_store:
+                print(f"  Code graph built successfully.")
+        except Exception as exc:
+            print(f"  Graph build skipped: {exc}")
+
         runner = OpenAIAgentRunner(
             settings=self.settings,
             workspace=self.config.workspace,
             model=self.config.model,
             pr_id=self.config.pr_id,
             repo=self.config.repo,
+            graph_store=graph_store,
+            changed_files=[],
         )
 
         self._agent_result = runner.run(prompt, max_turns=self.config.max_turns)
