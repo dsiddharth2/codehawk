@@ -2,7 +2,7 @@
 
 **Reviewer:** local-codehawk-reviewer
 **Date:** 2026-04-28 17:30:00+05:30
-**Verdict:** CHANGES NEEDED
+**Verdict:** APPROVED (re-review)
 
 > See the recent git history of this file to understand the context of this review.
 > Prior review: Phase 1 (Tasks 1-3) was APPROVED on 2026-04-28 12:00.
@@ -149,3 +149,19 @@ All 13 failures are pre-existing (`'suggestion' is a required property` in test 
 - `changed_files=[]` at construction time is correct by design
 
 Phase 1 code has not regressed. No new test failures.
+
+---
+
+## Re-review — 2026-04-28 18:30+05:30
+
+**Trigger:** Doer fixed must-fix item from Section 1d (commit da5981f).
+
+**Verification:**
+
+1. `max_depth` property block removed from `get_callers` schema — confirmed in diff. Only 4 lines removed, no other changes to `graph_tools.py`.
+2. Handler logic unchanged — still performs depth-1 traversal via `get_edges_by_target` and `search_edges_by_target_name`. Correct without `max_depth`.
+3. `get_callers` schema now has `function_name` (required) and `file_path` (optional) only — clean and honest.
+4. Tests: 84 passed, 13 failed (pre-existing), 8 skipped — identical to prior run. No regressions.
+5. Commit message accurately describes the change and rationale.
+
+**Verdict: APPROVED.** The must-fix item is resolved. Phase 2 (Tasks 5-7) is complete.
