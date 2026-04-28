@@ -203,7 +203,7 @@ For each genuine issue found:
 - Assign `category`: `security`, `performance`, `best_practices`, `code_style`, `documentation`
 - Assign `confidence`: 0.0-1.0 — how certain are you this is a real problem? (findings below 0.7 are filtered out by post_findings.py — set honestly)
 - Write a concrete `message` explaining the problem and why it matters
-- Optionally include a `suggestion` with a concrete fix
+- **Always** include a `suggestion` with a concrete code fix — show the corrected code the developer can copy-paste, not just a description of what to change. Use a fenced code block inside the string when possible.
 
 **Quality bar:** Only flag findings you would say aloud in a human code review. Do not flag style preferences, valid tradeoffs, or patterns the developer clearly chose intentionally.
 
@@ -345,6 +345,7 @@ The output must conform to `commands/findings-schema.json`.
 3. Verify all confidence scores are 0.0-1.0
 4. Verify all `id` values match pattern `cr-NNN`
 5. Verify `vcs` matches `$VCS` environment variable
+6. Verify `file` paths match EXACTLY what `changed_files[].path` returned from Step 2 (strip leading `/` only). Do NOT drop any path segments — if `get_pr` returned `/RepoName/src/Foo.cs`, the finding `file` must be `RepoName/src/Foo.cs`.
 
 Write the file:
 ```bash

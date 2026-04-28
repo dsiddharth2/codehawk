@@ -2,8 +2,8 @@ version: "3.9"
 
 # Local development docker-compose for codehawk
 # Usage:
-#   VCS=ado PR_ID=123 REPO=MyRepo AGENT=codex docker compose run --rm codehawk
-#   DRY_RUN=1 VCS=github PR_ID=456 REPO=owner/repo AGENT=claude docker compose run --rm codehawk
+#   VCS=ado PR_ID=123 REPO=MyRepo docker compose run --rm codehawk
+#   DRY_RUN=1 VCS=github PR_ID=456 REPO=owner/repo docker compose run --rm codehawk
 
 services:
   codehawk:
@@ -16,26 +16,25 @@ services:
       - PR_ID=${PR_ID}
       - REPO=${REPO}
       - VCS=${VCS:-ado}
-      - AGENT=${AGENT:-codex}
+
+      # OpenAI API key (required)
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-o3}
+      - MAX_TURNS=${MAX_TURNS:-40}
 
       # ADO auth (required for VCS=ado)
-      - ADO_PAT=${ADO_PAT:-}
-      - ADO_ORG=${ADO_ORG:-}
-      - ADO_PROJECT=${ADO_PROJECT:-}
+      - AZURE_DEVOPS_PAT=${ADO_PAT:-}
+      - AZURE_DEVOPS_ORG=${ADO_ORG:-}
+      - AZURE_DEVOPS_PROJECT=${ADO_PROJECT:-}
+      - AZURE_DEVOPS_REPO=${REPO:-}
+      - AUTH_MODE=${AUTH_MODE:-pat}
 
       # GitHub auth (required for VCS=github)
       - GH_TOKEN=${GH_TOKEN:-}
 
-      # Agent API keys
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
-
-      # Optional overrides
-      - CODEX_MODEL=${CODEX_MODEL:-o3}
-      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-opus-4-7}
-      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-pro}
+      # Optional
       - DRY_RUN=${DRY_RUN:-}
+      - COMMIT_ID=${COMMIT_ID:-}
 
     volumes:
       # Mount the repo under review at /workspace

@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from models.review_models import Finding, FindingsFile, FixVerification
+from models.review_models import Finding, FindingsFile, FixVerification, Usage
 import post_findings as pf
 
 
@@ -678,3 +678,172 @@ class TestGitHubPath:
         with patch("post_findings._fetch_posted_cr_ids_github", return_value=set()) as mock_fetch:
             pf.run(findings_path=str(path), dry_run=False, workspace=str(tmp_path))
         mock_fetch.assert_called_once_with(10, "org/repo")
+
+
+# ---------------------------------------------------------------------------
+# Cost estimation
+# ---------------------------------------------------------------------------
+
+class TestEstimateCost:
+    def test_known_model_returns_cost(self):
+        usage = Usage(input_tokens=1_000_000, output_tokens=500_000, total_tokens=1_500_000, model="o3")
+        result = pf._estimate_cost(usage)
+        assert result["input_cost_usd"] == 2.0
+        assert result["output_cost_usd"] == 4.0
+        assert result["total_cost_usd"] == 6.0
+
+    def test_model_with_date_suffix_matches(self):
+        usage = Usage(input_tokens=100_000, output_tokens=50_000, total_tokens=150_000, model="claude-sonnet-4-20250514")
+        result = pf._estimate_cost(usage)
+        assert result is not None
+        assert abs(result["total_cost_usd"] - 1.05) < 0.001
+
+    def test_unknown_model_returns_none_costs(self):
+        usage = Usage(input_tokens=1000, output_tokens=500, total_tokens=1500, model="unknown-model-v99")
+        result = pf._estimate_cost(usage)
+        assert result is not None
+        assert result["total_cost_usd"] is None
+        assert result["note"] == "unknown model"
+
+    def test_none_usage_returns_none(self):
+        assert pf._estimate_cost(None) is None
+
+    def test_no_model_returns_none(self):
+        usage = Usage(input_tokens=1000, output_tokens=500, total_tokens=1500, model=None)
+        assert pf._estimate_cost(usage) is None
+
+    def test_zero_tokens_returns_zero_cost(self):
+        usage = Usage(input_tokens=0, output_tokens=0, total_tokens=0, model="o3")
+        result = pf._estimate_cost(usage)
+        assert result["total_cost_usd"] == 0.0
+
+    def test_gpt4_1_mini_not_confused_with_gpt4_1(self):
+        usage = Usage(input_tokens=1_000_000, output_tokens=1_000_000, total_tokens=2_000_000, model="gpt-4.1-mini")
+        result = pf._estimate_cost(usage)
+        assert result["input_cost_usd"] == 0.4
+        assert result["output_cost_usd"] == 1.6
+
+
+# ---------------------------------------------------------------------------
+# Usage in pipeline output
+# ---------------------------------------------------------------------------
+
+class TestUsageInOutput:
+    def test_usage_present_when_in_findings(self, tmp_path):
+        data = {
+            "pr_id": 1, "repo": "R", "vcs": "ado",
+            "review_modes": ["standard"], "findings": [],
+            "usage": {
+                "input_tokens": 15000, "output_tokens": 3200,
+                "total_tokens": 18200, "model": "o3",
+                "duration_seconds": 45.2,
+            },
+        }
+        path = tmp_path / "findings.json"
+        path.write_text(json.dumps(data))
+        output = pf.run(findings_path=str(path), dry_run=True, workspace=str(tmp_path))
+        assert output["usage"] is not None
+        assert output["usage"]["total_tokens"] == 18200
+        assert output["usage"]["model"] == "o3"
+        assert output["cost_estimate"] is not None
+        assert output["cost_estimate"]["total_cost_usd"] > 0
+
+    def test_no_usage_produces_null(self, tmp_path):
+        data = {
+            "pr_id": 1, "repo": "R", "vcs": "ado",
+            "review_modes": ["standard"], "findings": [],
+        }
+        path = tmp_path / "findings.json"
+        path.write_text(json.dumps(data))
+        output = pf.run(findings_path=str(path), dry_run=True, workspace=str(tmp_path))
+        assert output["usage"] is None
+        assert output["cost_estimate"] is None
+
+    def test_usage_with_unknown_model(self, tmp_path):
+        data = {
+            "pr_id": 1, "repo": "R", "vcs": "ado",
+            "review_modes": ["standard"], "findings": [],
+            "usage": {
+                "input_tokens": 5000, "output_tokens": 1000,
+                "total_tokens": 6000, "model": "some-new-model",
+            },
+        }
+        path = tmp_path / "findings.json"
+        path.write_text(json.dumps(data))
+        output = pf.run(findings_path=str(path), dry_run=True, workspace=str(tmp_path))
+        assert output["usage"]["model"] == "some-new-model"
+        assert output["cost_estimate"]["note"] == "unknown model"
+
+
+# ---------------------------------------------------------------------------
+# Usage in summary markdown
+# ---------------------------------------------------------------------------
+
+class TestUsageInSummaryMarkdown:
+    def test_summary_includes_token_section(self):
+        usage = Usage(input_tokens=10000, output_tokens=2000, total_tokens=12000, model="o3", duration_seconds=30.0)
+        cost = {"model": "o3", "input_cost_usd": 0.02, "output_cost_usd": 0.016, "total_cost_usd": 0.036}
+        md = pf._build_summary_markdown(
+            findings_file=MagicMock(pr_id=1, repo="R", review_modes=["standard"]),
+            filtered_findings=[],
+            score=None,
+            gate_result={"passed": True, "reasons": []},
+            fix_verifications=[],
+            usage=usage,
+            cost_estimate=cost,
+        )
+        assert "Token Usage" in md
+        assert "10,000" in md
+        assert "$0.0360" in md
+
+    def test_summary_no_usage_section_when_absent(self):
+        md = pf._build_summary_markdown(
+            findings_file=MagicMock(pr_id=1, repo="R", review_modes=["standard"]),
+            filtered_findings=[],
+            score=None,
+            gate_result={"passed": True, "reasons": []},
+            fix_verifications=[],
+        )
+        assert "Token Usage" not in md
+
+    def test_summary_shows_duration(self):
+        usage = Usage(input_tokens=5000, output_tokens=1000, total_tokens=6000, model="o3", duration_seconds=12.5)
+        md = pf._build_summary_markdown(
+            findings_file=MagicMock(pr_id=1, repo="R", review_modes=["standard"]),
+            filtered_findings=[],
+            score=None,
+            gate_result={"passed": True, "reasons": []},
+            fix_verifications=[],
+            usage=usage,
+        )
+        assert "12.5s" in md
+
+
+# ---------------------------------------------------------------------------
+# Schema validation with usage
+# ---------------------------------------------------------------------------
+
+class TestSchemaWithUsage:
+    def test_valid_with_usage(self, sample_raw):
+        sample_raw["usage"] = {
+            "input_tokens": 1000, "output_tokens": 500,
+            "total_tokens": 1500, "model": "o3",
+            "duration_seconds": 10.0,
+        }
+        errors = pf._validate_schema(sample_raw)
+        assert errors == []
+
+    def test_valid_without_usage(self, sample_raw):
+        sample_raw.pop("usage", None)
+        errors = pf._validate_schema(sample_raw)
+        assert errors == []
+
+    def test_invalid_usage_missing_required(self, sample_raw):
+        """When jsonschema is available, missing required usage fields should error."""
+        try:
+            import jsonschema  # noqa: F401
+        except ImportError:
+            pytest.skip("jsonschema not installed — manual validator doesn't check nested refs")
+        sample_raw["usage"] = {"model": "o3"}
+        errors = pf._validate_schema(sample_raw)
+        assert len(errors) > 0
