@@ -36,7 +36,7 @@ All 4 handlers wrap their logic in `try/except Exception` and return `json.dumps
 
 ### 1d. `max_depth` Parameter Declared But Unused — FIXED
 
-**Doer:** fixed in commit 9979d9b — removed `max_depth` from `get_callers` schema; handler always does depth-1 traversal and GraphStore has no depth param for CALLS lookup, so the schema param was misleading.
+**Doer:** fixed in commit da5981f — removed `max_depth` from `get_callers` schema; handler always does depth-1 traversal and GraphStore has no depth param for CALLS lookup, so the schema param was misleading.
 
 ### 1d. Original Finding
 
