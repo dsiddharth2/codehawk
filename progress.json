@@ -73,16 +73,16 @@
       "phase": 3,
       "name": "Update commands/review-pr-core.md",
       "type": "work",
-      "status": "pending",
-      "notes": ""
+      "status": "completed",
+      "notes": "Added Step 2b (get_change_analysis with risk_score/review_priorities/test_gaps, skip for T1-T2). Updated Step 5c to prefer get_callers/get_blast_radius over ripgrep with fallback."
     },
     {
       "id": 10,
       "phase": 3,
       "name": "Create unit tests",
       "type": "work",
-      "status": "pending",
-      "notes": ""
+      "status": "completed",
+      "notes": "Created tests/unit/test_graph_builder.py (5 tests: enable_graph=False, ImportError, RuntimeError, success, diagnostic print). Created tests/unit/test_graph_tools.py (11 tests: registration x2, blast_radius x2, callers x3, dependents x2, change_analysis x2). All 16 pass."
     },
     {
       "id": 11,
