@@ -41,32 +41,32 @@
       "phase": 2,
       "name": "Create src/tools/graph_tools.py",
       "type": "work",
-      "status": "pending",
-      "notes": ""
+      "status": "completed",
+      "notes": "Created register_graph_tools with 4 tools: get_blast_radius (get_impact_radius + get_transitive_tests), get_callers (get_edges_by_target + search_edges_by_target_name for CALLS), get_dependents (get_edges_by_target + search_edges_by_target_name for IMPORTS_FROM), get_change_analysis (impact radius + risk score + test gaps)."
     },
     {
       "id": 6,
       "phase": 2,
       "name": "Wire graph tools into OpenAIAgentRunner",
       "type": "work",
-      "status": "pending",
-      "notes": ""
+      "status": "completed",
+      "notes": "Added graph_store/changed_files optional params to __init__. Conditional register_graph_tools call after register_workspace_tools. SYSTEM_PROMPT updated with graph tool mapping and fallback note."
     },
     {
       "id": 7,
       "phase": 2,
       "name": "Wire graph build into ReviewJob.create_findings()",
       "type": "work",
-      "status": "pending",
-      "notes": ""
+      "status": "completed",
+      "notes": "Inserted Phase 0 graph build block between _build_prompt() and OpenAIAgentRunner construction. Passes graph_store and changed_files=[] to runner."
     },
     {
       "id": 8,
       "phase": 2,
       "name": "VERIFY Phase 2",
       "type": "verify",
-      "status": "pending",
-      "notes": ""
+      "status": "completed",
+      "notes": "pytest tests/unit -v: 84 passed, 2 pre-existing failures (same as Phase 1 — missing 'suggestion' field in test fixtures). graph_tools.py exists with 4 tool registrations. Runner accepts graph_store param. ReviewJob wires graph build before runner. SYSTEM_PROMPT updated. Pushed to origin/feat/graph-integration."
     },
     {
       "id": 9,
