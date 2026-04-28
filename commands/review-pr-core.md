@@ -98,6 +98,26 @@ gh api repos/$REPO/pulls/$PR_ID/comments
 
 ---
 
+## Step 2b -- Analyze Change Impact (if graph tools available)
+
+If the `get_change_analysis` tool is available, call it now with the list of changed file paths from Step 2:
+
+get_change_analysis(changed_files=["path/to/file1.py", "path/to/file2.py"])
+
+This returns:
+- `risk_score` (0-1) for each changed file
+- `review_priorities` -- ranked list of functions to focus on
+- `test_gaps` -- functions that changed but have no test coverage
+
+Use this to plan your review:
+- For T1-T2 PRs: skip this step (full review is cheap enough)
+- For T3+ PRs: focus your review budget on high-risk files and functions first
+- Use `test_gaps` to flag missing test coverage in findings
+
+If the tool returns an error or is unavailable, continue to Step 3 normally.
+
+---
+
 ## Step 3 — Detect Review Mode
 
 Review mode determines which checklist to apply and which severity multipliers are active.
@@ -170,10 +190,15 @@ If a potential finding falls within a marked region, do not include it in findin
 
 For functions or classes that changed their signature or behavior:
 
-```bash
-# Find callers (use ripgrep — fast)
+**Preferred (if graph tools available):**
+get_callers(function_name="my_function", file_path="src/module.py")
+
+This returns precise structural caller information with no false positives.
+
+Use `get_blast_radius(changed_files=[...])` for a broader impact view.
+
+**Fallback (if graph tools unavailable):**
 rg "function_name|ClassName" /workspace/src --type py -l
-```
 
 If callers exist that may be broken by the change, flag a finding on the changed function — not on every caller.
 
