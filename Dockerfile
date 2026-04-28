@@ -25,7 +25,8 @@ RUN pip install --no-cache-dir \
     "pydantic>=2.0" \
     "pydantic-settings>=2.0" \
     msrest \
-    jsonschema
+    jsonschema \
+    "code-review-graph>=2.3,<3.0"
 
 # Copy application code
 COPY src/ /app/src/

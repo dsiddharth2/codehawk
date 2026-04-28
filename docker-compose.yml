@@ -35,6 +35,7 @@ services:
       # Optional
       - DRY_RUN=${DRY_RUN:-}
       - COMMIT_ID=${COMMIT_ID:-}
+      - ENABLE_GRAPH=${ENABLE_GRAPH:-1}
 
     volumes:
       # Mount the repo under review at /workspace

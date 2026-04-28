@@ -100,6 +100,10 @@ class Settings(BaseSettings):
         default="json",
         description="Log format (json or text)"
     )
+    enable_graph: bool = Field(
+        default=True,
+        description="Enable code-review-graph for AST-based blast-radius analysis"
+    )
 
     # PR Scoring Configuration (Penalty-Based: Lower is Better)
     enable_pr_scoring: bool = Field(

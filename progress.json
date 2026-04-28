@@ -1,0 +1,96 @@
+{
+  "project": "codehawk",
+  "sprint": "graph-integration",
+  "branch": "feat/graph-integration",
+  "base_branch": "main",
+  "tasks": [
+    {
+      "id": 1,
+      "phase": 1,
+      "name": "Add code-review-graph dependency",
+      "type": "work",
+      "status": "completed",
+      "notes": "Added code-review-graph>=2.3,<3.0 to requirements.txt, pyproject.toml, and Dockerfile. Package verified on PyPI (latest 2.3.2)."
+    },
+    {
+      "id": 2,
+      "phase": 1,
+      "name": "Add enable_graph config setting",
+      "type": "work",
+      "status": "completed",
+      "notes": "Added enable_graph: bool = Field(default=True) to Settings class after log_format. Added ENABLE_GRAPH=${ENABLE_GRAPH:-1} to docker-compose.yml environment block."
+    },
+    {
+      "id": 3,
+      "phase": 1,
+      "name": "Create src/graph_builder.py",
+      "type": "work",
+      "status": "completed",
+      "notes": "Created src/graph_builder.py with build_graph(workspace) -> Optional[Any]. Uses code_review_graph.tools.build.build_or_update_graph (full_rebuild=True, postprocess=minimal) then opens GraphStore via get_db_path. Has 30s timeout via ThreadPoolExecutor, lazy imports, and try/except fallback on all errors. Returns None when enable_graph=False."
+    },
+    {
+      "id": 4,
+      "phase": 1,
+      "name": "VERIFY Phase 1",
+      "type": "verify",
+      "status": "completed",
+      "notes": "pytest tests/unit -v: 84 passed, 2 pre-existing failures (TestDryRunEndToEnd::test_gate_passes_with_no_criticals, TestGitHubPath::test_github_dry_run_produces_valid_output) — both fail on missing 'suggestion' field in test fixtures, unrelated to Phase 1 changes. graph_builder.py exists with defensive coding. enable_graph accessible via get_settings(). Dependency in all three files."
+    },
+    {
+      "id": 5,
+      "phase": 2,
+      "name": "Create src/tools/graph_tools.py",
+      "type": "work",
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "id": 6,
+      "phase": 2,
+      "name": "Wire graph tools into OpenAIAgentRunner",
+      "type": "work",
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "id": 7,
+      "phase": 2,
+      "name": "Wire graph build into ReviewJob.create_findings()",
+      "type": "work",
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "id": 8,
+      "phase": 2,
+      "name": "VERIFY Phase 2",
+      "type": "verify",
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "id": 9,
+      "phase": 3,
+      "name": "Update commands/review-pr-core.md",
+      "type": "work",
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "id": 10,
+      "phase": 3,
+      "name": "Create unit tests",
+      "type": "work",
+      "status": "pending",
+      "notes": ""
+    },
+    {
+      "id": 11,
+      "phase": 3,
+      "name": "VERIFY Phase 3",
+      "type": "verify",
+      "status": "pending",
+      "notes": ""
+    }
+  ]
+}

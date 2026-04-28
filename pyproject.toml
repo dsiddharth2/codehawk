@@ -12,6 +12,7 @@ dependencies = [
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "msrest",
+    "code-review-graph>=2.3,<3.0",
 ]
 
 [project.optional-dependencies]
