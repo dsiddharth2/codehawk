@@ -32,10 +32,54 @@ MAX_TOTAL_FINDINGS = 30
 MAX_PER_FILE = 5
 CODEREVIEW_YML = ".codereview.yml"
 
+# Cost per 1M tokens: (input, output) in USD.
+# Sorted longest-prefix-first so "gpt-4.1-mini" matches before "gpt-4.1".
+MODEL_COST_TABLE: Dict[str, Tuple[float, float]] = {
+    "gpt-4.1-mini":          (0.40, 1.60),
+    "gpt-4.1-nano":          (0.10, 0.40),
+    "gpt-4.1":               (2.00, 8.00),
+    "gpt-4o-mini":           (0.15, 0.60),
+    "gpt-4o":                (2.50, 10.00),
+    "o4-mini":               (1.10, 4.40),
+    "o3":                    (2.00, 8.00),
+    "claude-opus-4":         (15.00, 75.00),
+    "claude-sonnet-4":       (3.00, 15.00),
+    "claude-haiku-3.5":      (0.80, 4.00),
+    "gemini-2.5-pro":        (1.25, 10.00),
+    "gemini-2.5-flash":      (0.15, 0.60),
+    "gemini-2.0-flash":      (0.10, 0.40),
+}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _estimate_cost(usage) -> Optional[Dict[str, Any]]:
+    """Estimate USD cost from a Usage object using MODEL_COST_TABLE."""
+    if usage is None or not usage.model:
+        return None
+
+    model = usage.model
+    cost_per_m = None
+    for prefix, rates in MODEL_COST_TABLE.items():
+        if model == prefix or model.startswith(prefix + "-") or model.startswith(prefix + " "):
+            cost_per_m = rates
+            break
+
+    if cost_per_m is None:
+        return {"model": model, "input_cost_usd": None, "output_cost_usd": None, "total_cost_usd": None, "note": "unknown model"}
+
+    input_cost = usage.input_tokens * cost_per_m[0] / 1_000_000
+    output_cost = usage.output_tokens * cost_per_m[1] / 1_000_000
+    total_cost = input_cost + output_cost
+    return {
+        "model": model,
+        "input_cost_usd": round(input_cost, 4),
+        "output_cost_usd": round(output_cost, 4),
+        "total_cost_usd": round(total_cost, 4),
+    }
+
 
 def _load_json(path: str) -> Any:
     with open(path, "r", encoding="utf-8") as fh:
@@ -115,7 +159,7 @@ def _parse_findings_file(data: dict):
     """
     Parse raw dict into FindingsFile dataclass.
     """
-    from models.review_models import Finding, FindingsFile, FixVerification
+    from models.review_models import Finding, FindingsFile, FixVerification, Usage
 
     findings = [
         Finding(
@@ -141,6 +185,17 @@ def _parse_findings_file(data: dict):
         for fv in data.get("fix_verifications", [])
     ]
 
+    usage = None
+    raw_usage = data.get("usage")
+    if raw_usage and isinstance(raw_usage, dict):
+        usage = Usage(
+            input_tokens=raw_usage["input_tokens"],
+            output_tokens=raw_usage["output_tokens"],
+            total_tokens=raw_usage["total_tokens"],
+            model=raw_usage.get("model"),
+            duration_seconds=raw_usage.get("duration_seconds"),
+        )
+
     return FindingsFile(
         pr_id=data["pr_id"],
         repo=data["repo"],
@@ -150,6 +205,7 @@ def _parse_findings_file(data: dict):
         fix_verifications=fix_verifications,
         tool_calls=data.get("tool_calls", 0),
         agent=data.get("agent"),
+        usage=usage,
     )
 
 
@@ -457,6 +513,8 @@ def _build_summary_markdown(
     gate_result: Dict[str, Any],
     fix_verifications: list,
     comparison_md: str = "",
+    usage=None,
+    cost_estimate: Optional[Dict[str, Any]] = None,
 ) -> str:
     severity_counts = {"critical": 0, "warning": 0, "suggestion": 0}
     for f in filtered_findings:
@@ -519,6 +577,23 @@ def _build_summary_markdown(
     if gate_result.get("reasons"):
         for reason in gate_result["reasons"]:
             lines.append(f"- {reason}")
+        lines.append("")
+
+    if usage:
+        lines += [
+            "## 📊 Token Usage",
+            "",
+            f"| Metric | Value |",
+            f"|--------|-------|",
+            f"| Model | `{usage.model or 'unknown'}` |",
+            f"| Input tokens | {usage.input_tokens:,} |",
+            f"| Output tokens | {usage.output_tokens:,} |",
+            f"| Total tokens | {usage.total_tokens:,} |",
+        ]
+        if usage.duration_seconds is not None:
+            lines.append(f"| Duration | {usage.duration_seconds:.1f}s |")
+        if cost_estimate and cost_estimate.get("total_cost_usd") is not None:
+            lines.append(f"| Estimated cost | **${cost_estimate['total_cost_usd']:.4f}** |")
         lines.append("")
 
     lines.append("---")
@@ -673,7 +748,10 @@ def run(
     if findings_file.fix_verifications:
         comparison_md = _generate_comparison_md(score, findings_file.fix_verifications, pr_id)
 
-    # 12. Post/update summary
+    # 12. Estimate cost from usage
+    cost_estimate = _estimate_cost(findings_file.usage)
+
+    # 13. Post/update summary
     summary_md = _build_summary_markdown(
         findings_file=findings_file,
         filtered_findings=capped,
@@ -681,6 +759,8 @@ def run(
         gate_result=gate_result,
         fix_verifications=findings_file.fix_verifications,
         comparison_md=comparison_md,
+        usage=findings_file.usage,
+        cost_estimate=cost_estimate,
     )
 
     if not dry_run and settings:
@@ -744,6 +824,14 @@ def run(
             for fv in findings_file.fix_verifications
         ],
         "has_comparison": bool(comparison_md),
+        "usage": {
+            "input_tokens": findings_file.usage.input_tokens,
+            "output_tokens": findings_file.usage.output_tokens,
+            "total_tokens": findings_file.usage.total_tokens,
+            "model": findings_file.usage.model,
+            "duration_seconds": findings_file.usage.duration_seconds,
+        } if findings_file.usage else None,
+        "cost_estimate": cost_estimate,
     }
 
     return output

@@ -37,6 +37,10 @@ logs/
 coverage/
 .nyc_output/
 
+# Test results / cloned repos
+results/
+findings-output/
+
 # Python
 __pycache__/
 *.pyc

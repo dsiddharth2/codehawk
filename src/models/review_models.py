@@ -65,14 +65,6 @@ class FetchFileContentInput:
     repository_id: Optional[str] = None
 
 
-@dataclass
-class ReviewPRInput:
-    """Input for ReviewPRJob."""
-    pr_id: int
-    repository_id: Optional[str] = None
-    specific_file: Optional[str] = None
-
-
 # ============================================================================
 # Review Models
 # ============================================================================
@@ -139,29 +131,8 @@ class PRScore:
     quality_level: str  # "Perfect", "Excellent", "Good", "Needs Work", "Poor", "Critical"
 
 
-@dataclass
-class PRReviewJobResult:
-    """Aggregated result of reviewing an entire PR."""
-    pr_id: int
-    pr_title: str
-    pr_description: str
-    source_branch: str
-    target_branch: str
-    author: str
-    files_reviewed: int
-    files_skipped: int
-    files_failed: int
-    total_comments: int
-    file_results: List[ReviewResult]
-    skipped_files: List[str]
-    failed_files: List[Dict[str, str]]
-    overall_summary: str
-    statistics: Dict[str, int]
-    score: Optional['PRScore'] = None
-
-
 # ============================================================================
-# Fix Verification Models (legacy — used by activities)
+# Fix Verification Models
 # ============================================================================
 
 @dataclass
@@ -245,6 +216,16 @@ class FixVerification:
 
 
 @dataclass
+class Usage:
+    """Token usage and timing stats from the agent run."""
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    model: Optional[str] = None
+    duration_seconds: Optional[float] = None
+
+
+@dataclass
 class FindingsFile:
     """Top-level structure of findings.json written by the agent."""
     pr_id: int
@@ -255,3 +236,4 @@ class FindingsFile:
     fix_verifications: List[FixVerification] = field(default_factory=list)
     tool_calls: int = 0
     agent: Optional[str] = None      # "codex" | "claude" | "gemini"
+    usage: Optional[Usage] = None
