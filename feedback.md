@@ -1,167 +1,195 @@
-# Graph Integration — Code Review
+# Graph Integration — Final Code Review (Phase 3 + Cumulative)
 
 **Reviewer:** local-codehawk-reviewer
-**Date:** 2026-04-28 17:30:00+05:30
-**Verdict:** APPROVED (re-review)
+**Date:** 2026-04-28 22:15:00+05:30
+**Verdict:** APPROVED
 
 > See the recent git history of this file to understand the context of this review.
-> Prior review: Phase 1 (Tasks 1-3) was APPROVED on 2026-04-28 12:00.
+> Prior reviews: Phase 1 APPROVED (979b887), Phase 2 APPROVED after re-review (77144d6).
 
 ---
 
-## 1. Graph Tools — `src/tools/graph_tools.py` (Task 5)
+## 1. Prompt Update — `commands/review-pr-core.md` (Task 9)
 
-### 1a. Registration Pattern — PASS
+### 1a. Step 2b — Change Impact Analysis — PASS
 
-`register_graph_tools(registry, workspace, graph_store, changed_files)` follows the exact pattern from `workspace_tools.py` and `vcs_tools.py`:
-- Signature accepts `ToolRegistry` as first arg
-- Imports `Tool, ToolRegistry` from `tools.registry`
-- Uses inner handler functions with `registry.register(Tool(...))` calls
-- 4 tools registered: `get_blast_radius`, `get_callers`, `get_dependents`, `get_change_analysis`
+Lines 101-117: Step 2b is inserted between Step 2 (PR data fetch) and Step 3 (mode detection). This is the correct placement — the agent needs the changed file list from Step 2 before it can call `get_change_analysis`.
 
-### 1b. Tool Schemas — PASS
+Content matches PLAN.md specification:
+- Calls `get_change_analysis(changed_files=[...])` with file paths from Step 2
+- Documents the three return fields: `risk_score`, `review_priorities`, `test_gaps`
+- T1-T2 skip guidance is sensible — small PRs don't need prioritization
+- T3+ guidance directs focus to high-risk files and test gaps
+- Fallback instruction ("continue to Step 3 normally") is present
 
-All 4 schemas match the OpenAI function-calling format used in `vcs_tools.py`:
-- `description` (string) and `parameters` (object with `properties` and `required`)
-- `get_blast_radius`: `changed_files` (array of strings, required) — correct
-- `get_callers`: `function_name` (string, required), `file_path` (string, optional), `max_depth` (integer, optional) — correct
-- `get_dependents`: `file_path` (string, required) — correct
-- `get_change_analysis`: `changed_files` (array of strings, required) — correct
+### 1b. Step 5c — Graph-First Caller Lookups — PASS
 
-All parameter types match PLAN.md specification.
+Lines 189-201: Step 5c now shows graph tools as the preferred path with ripgrep as fallback.
 
-### 1c. Error Handling — PASS
+- `get_callers(function_name=..., file_path=...)` example is correct and matches the current schema (no `max_depth` — consistent with the Phase 2 fix in da5981f)
+- `get_blast_radius(changed_files=[...])` suggested for broader impact view — correct
+- Fallback `rg` command preserved for when graph tools are unavailable
+- Clear "Preferred" vs "Fallback" labeling — the agent can distinguish which path to take
 
-All 4 handlers wrap their logic in `try/except Exception` and return `json.dumps({"error": str(e)})` on failure. This matches the plan requirement and is consistent with error handling in `workspace_tools.py` (e.g., `read_local_file` handler lines 72-73).
+### 1c. Factual Accuracy — PASS
 
-### 1d. `max_depth` Parameter Declared But Unused — FIXED
-
-**Doer:** fixed in commit da5981f — removed `max_depth` from `get_callers` schema; handler always does depth-1 traversal and GraphStore has no depth param for CALLS lookup, so the schema param was misleading.
-
-### 1d. Original Finding
-
-`get_callers` declares `max_depth` in its schema (line 126-128) but the handler at lines 78-97 never reads `args.get("max_depth")`. The handler always does depth-1 traversal regardless of what the agent passes.
-
-This is a functional gap: the agent may pass `max_depth=3` expecting transitive callers and get only direct callers. Either:
-1. Implement depth traversal (query callers of callers up to `max_depth`), or
-2. Remove `max_depth` from the schema so the agent doesn't send a value that gets silently ignored
-
-Option 2 is simpler and honest. The plan listed it as "optional, default 1" which suggests depth-1 was the intended behavior — so removing it from the schema is the cleaner fix.
-
-### 1e. `get_dependents` Edge Query Strategy — NOTE
-
-`handle_get_dependents` (lines 142-162) first queries by exact target path, then falls back to `search_edges_by_target_name`. The `edge.file_path` attribute (line 157) is used for grouping — this assumes `file_path` exists on the edge object. If the `code-review-graph` API returns edges without `file_path`, this will hit the `except` clause and return an error. Since the graph store API is external and was adapted by the doer from real inspection, this is acceptable but worth noting.
-
-### 1f. Security — PASS
-
-No shell execution, no path traversal outside workspace, no secrets. All inputs are strings passed to the graph store API which operates on a local SQLite database. `file_path.lstrip("/")` in `get_dependents` prevents absolute path injection.
+- Tool names match exactly: `get_change_analysis`, `get_callers`, `get_blast_radius` — verified against `src/tools/graph_tools.py`
+- Parameter names match current schemas: `changed_files`, `function_name`, `file_path`
+- No references to removed `max_depth` parameter — good
 
 ---
 
-## 2. Runner Wiring — `src/agents/openai_runner.py` (Task 6)
+## 2. Unit Tests — `tests/unit/test_graph_builder.py` (Task 10, Part 1)
 
-### 2a. Constructor Params — PASS
+### 2a. Test Coverage vs PLAN.md — PASS
 
-`__init__` accepts `graph_store=None` and `changed_files=None` as optional keyword arguments (lines 75-76). These default to `None`, which means existing callers are not affected.
+PLAN.md specifies 5 tests for `TestBuildGraph`. All 5 are present:
 
-### 2b. Conditional Registration — PASS
+| Plan requirement | Test method | Status |
+|-----------------|------------|--------|
+| `test_returns_none_when_package_not_installed` | Line 49 | PASS |
+| `test_returns_none_when_build_raises_exception` | Line 66 | PASS |
+| `test_returns_store_on_success` | Line 75 | PASS |
+| `test_returns_none_when_enable_graph_is_false` | Line 42 | PASS |
+| `test_prints_diagnostic_on_failure` | Line 89 | PASS |
 
-Lines 91-93: `if graph_store is not None:` — correct guard. Uses lazy import (`from tools.graph_tools import register_graph_tools`) inside the conditional, matching the pattern from `graph_builder.py`. Passes `changed_files or []` to handle `None`.
+### 2b. Mocking Strategy — PASS
 
-Registration happens after `register_workspace_tools` (line 90), which matches the plan: "After `register_workspace_tools` call, add conditional graph tool registration."
+The `_crg_sys_modules()` helper (lines 23-38) patches `sys.modules` with a mock hierarchy for `code_review_graph` and its sub-packages (`tools.build`, `graph`, `incremental`). This is the correct approach for mocking a package that uses lazy imports inside a function body — `mocker.patch` on module-level names wouldn't work since the imports happen at call time inside `_build()`.
 
-### 2c. SYSTEM_PROMPT Update — PASS
+The `test_returns_none_when_package_not_installed` test (lines 49-64) uses `patch.dict(sys.modules, cleaned, clear=True)` and then explicitly pops `code_review_graph` entries. This correctly simulates the package being absent. The `clear=True` followed by selective pops is slightly heavy-handed but functional — it ensures no stale module references leak through.
 
-Lines 33-41 add the 4 graph tool mappings and the fallback note. The text matches the plan specification exactly:
-- `get_change_analysis` → risk scores + review priorities
-- `get_blast_radius` → all affected files/functions/tests
-- `get_callers` → precise structural results (instead of `search_code`)
-- `get_dependents` → files importing a module
-- Fallback note about graph tools only being available when graph was built successfully
+### 2c. Test Quality — PASS
 
-**NOTE:** The graph tool lines are present in the SYSTEM_PROMPT unconditionally — even when `graph_store is None` and no graph tools are registered. The agent will see instructions about tools that don't exist. This is low-severity because the fallback note tells it to use `search_code` if graph tools return errors, and the agent won't see them in its tool list. But it adds noise to the prompt. Consider making the graph section conditional in a future cleanup — not blocking.
+- `test_returns_store_on_success` asserts identity (`is mock_store`), not just truthiness — correct
+- `test_prints_diagnostic_on_failure` uses `capsys` to capture stdout and checks for the diagnostic message — matches the `print()` convention in `graph_builder.py`
+- No redundant tests — each covers a distinct code path (disabled, ImportError, RuntimeError, success, diagnostic output)
 
----
+### 2d. Missing Coverage — NOTE
 
-## 3. ReviewJob Wiring — `src/review_job.py` (Task 7)
-
-### 3a. Graph Build Placement — PASS
-
-Lines 74-80: Graph build is inserted between `self._build_prompt()` (line 72) and `OpenAIAgentRunner` construction (line 82). This matches the plan exactly.
-
-### 3b. Best-Effort Pattern — PASS
-
-The `try/except Exception` block (lines 75-80) catches any failure and prints a diagnostic, falling back to `graph_store = None`. This is correct — a failed graph build should not block the review.
-
-### 3c. `changed_files=[]` Hardcoded — NOTE
-
-Line 89: `changed_files=[]` is always empty. The plan acknowledged this: "Graph tools accept `changed_files` as explicit parameter; agent passes them after `get_pr`." The agent itself will pass changed files as tool arguments at runtime, so this empty default is correct for construction time. The graph tools receive `changed_files` via their closure from `register_graph_tools`, but `get_blast_radius` and `get_change_analysis` take `changed_files` as explicit handler arguments — so the empty construction-time list is unused by those tools. No bug here.
+The timeout path (`concurrent.futures.TimeoutError` at line 58 of `graph_builder.py`) is not tested. This is a gap, but it's a difficult path to test reliably in a unit test (would require either a slow mock or time manipulation). The code is straightforward (`return None` on timeout), so the risk of a latent bug is low. Not blocking.
 
 ---
 
-## 4. Phase 1 Regression Check
+## 3. Unit Tests — `tests/unit/test_graph_tools.py` (Task 10, Part 2)
 
-Re-checked all Phase 1 files against the current branch head:
+### 3a. Test Coverage vs PLAN.md — PASS
 
-- `src/graph_builder.py` — unchanged from Phase 1 approval (60 lines, same content)
-- `src/config.py` — `enable_graph` field still present, unchanged
-- `requirements.txt` — `code-review-graph>=2.3,<3.0` still present
-- `pyproject.toml` — dependency still present
-- `Dockerfile` — dependency still present
-- `docker-compose.yml` — `ENABLE_GRAPH` env var still present
+PLAN.md specifies 11 tests across 5 classes. All 11 are present:
 
-**No Phase 1 regressions.**
+| Class | Plan requirement | Test method | Status |
+|-------|-----------------|------------|--------|
+| `TestRegisterGraphTools` | `test_registers_four_tools` | Line 42 | PASS |
+| `TestRegisterGraphTools` | `test_tool_names_correct` | Line 48 | PASS |
+| `TestGetBlastRadius` | `test_returns_impacted_files` | Line 68 | PASS |
+| `TestGetBlastRadius` | `test_returns_error_on_store_exception` | Line 86 | PASS |
+| `TestGetCallers` | `test_returns_callers_list` | Line 108 | PASS |
+| `TestGetCallers` | `test_returns_empty_for_unknown_function` | Line 125 | PASS |
+| `TestGetCallers` | `test_error_on_store_failure` | Line 135 | PASS |
+| `TestGetDependents` | `test_returns_dependent_files` | Line 156 | PASS |
+| `TestGetDependents` | `test_error_on_store_failure` | Line 169 | PASS |
+| `TestGetChangeAnalysis` | `test_returns_risk_and_priorities` | Line 190 | PASS |
+| `TestGetChangeAnalysis` | `test_error_on_store_failure` | Line 208 | PASS |
+
+### 3b. Mocking Strategy — PASS
+
+Tests mock `graph_store` as a `MagicMock()` and configure return values for specific methods (`get_impact_radius`, `get_transitive_tests`, `search_edges_by_target_name`, `get_edges_by_target`, `get_node`). This is the right approach — the graph store is an external dependency and the tests verify handler logic, not graph store behavior.
+
+Helper functions `_make_node` and `_make_edge` (lines 17-34) create mock objects with the same attribute interface the handlers expect. This keeps test setup clean and consistent.
+
+### 3c. Test Quality — PASS
+
+- Registration tests verify both count (`len == 4`) and names — catches both missing and misnamed tools
+- Success-path tests verify JSON structure (key presence + type checks), not just non-emptiness
+- Error-path tests verify the `{"error": ...}` envelope is returned — matches the handler pattern
+- `test_returns_callers_list` verifies deep structure (`callers[0]["name"]`, `callers[0]["file"]`) — good
+- `test_returns_risk_and_priorities` verifies `risk_score` is bounded `0.0 <= score <= 1.0` — validates the `min(1.0, ...)` logic
+- No redundant tests — each covers a distinct scenario
+
+### 3d. Test Isolation — PASS
+
+Tests use `registry.dispatch()` to invoke handlers through the same path the real runner uses. This exercises both registration and dispatch, not just the handler function directly. Each test creates a fresh `ToolRegistry` via `_registry_with_store()` — no shared state between tests.
+
+### 3e. Missing Coverage — NOTE
+
+The `get_callers` handler has two code paths: file_path-based lookup (line 78-85 in graph_tools.py) and name-based search (line 87-92). The `test_returns_callers_list` test only exercises the name-based path because `file_path` is not passed. The file_path path is untested. Low risk since the logic is similar, but worth noting for future expansion.
+
+---
+
+## 4. Cumulative Check — All Phases
+
+### 4a. Phase 1 Files — No Regressions
+
+- `src/graph_builder.py` — 60 lines, unchanged since Phase 1 approval. Defensive coding intact: lazy imports, `enable_graph` check, 30s timeout, `None` on all failures.
+- `src/config.py` — `enable_graph` field present
+- `requirements.txt` — `code-review-graph>=2.3,<3.0` present
+- `pyproject.toml` — dependency present
+- `Dockerfile` — dependency in pip install chain
+- `docker-compose.yml` — `ENABLE_GRAPH=${ENABLE_GRAPH:-1}` present
+
+### 4b. Phase 2 Files — No Regressions
+
+- `src/tools/graph_tools.py` — 227 lines, 4 tools. `max_depth` removed from `get_callers` schema per Phase 2 review fix (da5981f). All handlers have try/except with error JSON.
+- `src/agents/openai_runner.py` — SYSTEM_PROMPT includes graph tool mapping. Constructor accepts `graph_store` and `changed_files`. Conditional registration at lines 95-97.
+- `src/review_job.py` — Phase 0 graph build at lines 69-77, passed to runner at lines 79-86.
+
+### 4c. Phase 3 Files — New
+
+- `commands/review-pr-core.md` — Step 2b and Step 5c additions only. No changes to existing steps. Remaining prompt is identical to pre-graph state.
+- `tests/unit/test_graph_builder.py` — 5 tests, all pass
+- `tests/unit/test_graph_tools.py` — 11 tests, all pass
+
+### 4d. Cross-Phase Consistency — PASS
+
+- Tool names in SYSTEM_PROMPT (Phase 2) match tool registrations in `graph_tools.py` (Phase 2) match prompt instructions in `review-pr-core.md` (Phase 3) match test assertions in `test_graph_tools.py` (Phase 3): `get_blast_radius`, `get_callers`, `get_dependents`, `get_change_analysis`
+- Parameter names in prompt examples match schemas: `changed_files`, `function_name`, `file_path`
+- No stale `max_depth` references anywhere — clean removal across all files
 
 ---
 
 ## 5. Test Results
 
 ```
-84 passed, 13 failed, 8 skipped (21.62s)
+100 passed, 13 failed, 8 skipped (2.80s)
 ```
 
-All 13 failures are pre-existing (`'suggestion' is a required property` in test fixtures) — same failures documented in Phase 1 review. The count breakdown:
-- 2 unit test failures: `test_gate_passes_with_no_criticals`, `test_github_dry_run_produces_valid_output`
-- 11 integration test failures: all in `test_ado_pr_review.py`
+- **100 passed** — up from 84 in Phase 2, reflecting 16 new graph tests (5 builder + 11 tools)
+- **13 failed** — all pre-existing (`'suggestion' is a required property` in test fixtures). 2 unit failures (`test_gate_passes_with_no_criticals`, `test_github_dry_run_produces_valid_output`) + 11 integration failures (all in `test_ado_pr_review.py`). These are unrelated to graph integration — the fixtures predate this sprint.
+- **8 skipped** — unchanged from prior phases
 
-**No new test failures introduced by Phase 2.**
+**No new test failures introduced by Phase 3. No regressions from Phases 1 or 2.**
 
 ---
 
-## 6. Pattern Consistency — PASS
+## 6. Security — PASS
 
-- `graph_tools.py` follows the same module structure as `workspace_tools.py` and `vcs_tools.py` (module docstring, imports, single `register_*` function with inner handlers)
-- Handler functions use `args["key"]` for required params and `args.get("key")` for optional — consistent with existing tools
-- JSON serialization uses `json.dumps()` throughout — consistent
-- Diagnostic `print()` statements in `review_job.py` match the stdout convention used elsewhere in the pipeline
+- No shell execution in any new code
+- No secrets in code or tests
+- `file_path.lstrip("/")` in graph tools prevents absolute path injection
+- All graph store interactions are read-only queries against a local SQLite database
+- Mock-based tests don't touch real filesystems or networks
+
+---
+
+## 7. Pattern Consistency — PASS
+
+- Test files follow existing patterns: `pytest` with `mocker`/`capsys` fixtures, class-based test grouping, `_make_*` helpers for test data
+- `test_graph_builder.py` imports the module directly (`import graph_builder`) — consistent with how `test_pr_scorer.py` imports `pr_scorer`
+- `test_graph_tools.py` imports from `tools.graph_tools` and `tools.registry` — consistent with production import paths
+- No `conftest.py` changes needed — new tests are self-contained
 
 ---
 
 ## Summary
 
-**Phase 2 is substantially correct but has one must-fix item:**
+Phase 3 (Tasks 9-10) is complete and correct. The prompt update in `review-pr-core.md` gives the agent clear graph-first instructions with proper fallback guidance. Unit tests cover all cases specified in PLAN.md with proper mocking — no `code-review-graph` package required to run them.
 
-1. **MUST FIX — `max_depth` unused in `get_callers`** (Section 1d): The schema declares `max_depth` but the handler ignores it. Remove `max_depth` from the schema to avoid misleading the agent. (If multi-depth traversal is desired, that's a Phase 3+ enhancement.)
+**Non-blocking notes carried forward from Phase 2:**
+- SYSTEM_PROMPT graph tool instructions are unconditional (shown even when graph is absent) — cosmetic, defer to future cleanup
+- `get_dependents` assumes `edge.file_path` exists on edge objects — acceptable given empirical API discovery
 
-**Non-blocking notes:**
-- SYSTEM_PROMPT graph tool instructions are unconditional (always shown even when graph is absent) — cosmetic, defer to Phase 3+
-- `get_dependents` assumes `edge.file_path` exists on edge objects — acceptable given API was discovered empirically
-- `changed_files=[]` at construction time is correct by design
+**Non-blocking notes from Phase 3:**
+- Timeout path in `graph_builder.py` is untested (difficult to unit test reliably)
+- `get_callers` file_path-based lookup path is untested (only name-based path exercised)
 
-Phase 1 code has not regressed. No new test failures.
-
----
-
-## Re-review — 2026-04-28 18:30+05:30
-
-**Trigger:** Doer fixed must-fix item from Section 1d (commit da5981f).
-
-**Verification:**
-
-1. `max_depth` property block removed from `get_callers` schema — confirmed in diff. Only 4 lines removed, no other changes to `graph_tools.py`.
-2. Handler logic unchanged — still performs depth-1 traversal via `get_edges_by_target` and `search_edges_by_target_name`. Correct without `max_depth`.
-3. `get_callers` schema now has `function_name` (required) and `file_path` (optional) only — clean and honest.
-4. Tests: 84 passed, 13 failed (pre-existing), 8 skipped — identical to prior run. No regressions.
-5. Commit message accurately describes the change and rationale.
-
-**Verdict: APPROVED.** The must-fix item is resolved. Phase 2 (Tasks 5-7) is complete.
+**All 3 phases are APPROVED. Sprint 2 graph integration is complete.**
