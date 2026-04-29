@@ -1,8 +1,12 @@
 """
 OpenAI API Agent Runner — pure orchestration.
 
-Uses the OpenAI Chat Completions API with function calling to run the
-code review agent. Tools are registered via the ToolRegistry from src/tools/.
+Supports two OpenAI API modes:
+  - Chat Completions API (gpt-4o-mini, gpt-4.1, o3, etc.)
+  - Responses API (gpt-5-codex, codex-mini-latest, etc.)
+
+The runner auto-detects which API to use based on the model name.
+Tools are registered via the ToolRegistry from src/tools/.
 """
 
 import json
@@ -32,6 +36,13 @@ IMPORTANT tool mapping — use these tools instead of shell commands:
 - Instead of `cat /workspace/<file>` → use the `read_local_file` tool
 - Instead of `git blame <file>` → use the `git_blame` tool
 - Instead of `git diff` between commits → use the `get_file_diff` tool
+- To understand change impact → use `get_change_analysis` (risk scores + review priorities)
+- To find blast radius of changes → use `get_blast_radius` (all affected files/functions/tests)
+- Instead of `search_code("fn_name")` for callers → use `get_callers` (precise structural results)
+- To find files importing a module → use `get_dependents`
+
+Note: Graph tools are only available when the codebase graph was built successfully. \
+If a graph tool returns an error, fall back to `search_code` or `read_local_file`.
 
 When you have completed your review, output the findings JSON as your final message. \
 Do NOT attempt to write files — just output the JSON directly in a ```json code fence. \
@@ -55,8 +66,11 @@ class AgentResult:
         self.returncode: int = 0
 
 
+RESPONSES_API_MODELS = {"gpt-5-codex", "codex-mini-latest"}
+
+
 class OpenAIAgentRunner:
-    """Runs the code review agent via OpenAI Chat Completions API with function calling."""
+    """Runs the code review agent via OpenAI API with function calling."""
 
     def __init__(
         self,
@@ -65,6 +79,8 @@ class OpenAIAgentRunner:
         model: str = "o3",
         pr_id: int = 0,
         repo: str = "",
+        graph_store=None,
+        changed_files=None,
     ):
         self.settings = settings
         self.workspace = Path(workspace)
@@ -83,8 +99,24 @@ class OpenAIAgentRunner:
             default_repo=repo,
         )
         register_workspace_tools(self.registry, workspace=self.workspace)
+        if graph_store is not None:
+            from tools.graph_tools import register_graph_tools
+            register_graph_tools(self.registry, self.workspace, graph_store, changed_files or [])
+
+    @property
+    def _use_responses_api(self) -> bool:
+        return self.model in RESPONSES_API_MODELS
 
     def run(self, prompt: str, max_turns: int = 40) -> AgentResult:
+        if self._use_responses_api:
+            return self._run_responses(prompt, max_turns)
+        return self._run_chat_completions(prompt, max_turns)
+
+    # ------------------------------------------------------------------
+    # Chat Completions API (gpt-4o-mini, gpt-4.1, o3, etc.)
+    # ------------------------------------------------------------------
+
+    def _run_chat_completions(self, prompt: str, max_turns: int = 40) -> AgentResult:
         result = AgentResult()
         result.model = self.model
         start_time = time.time()
@@ -96,7 +128,7 @@ class OpenAIAgentRunner:
 
         tool_defs = self.registry.openai_definitions()
 
-        print(f"\n  OpenAI API runner: model={self.model}, max_turns={max_turns}")
+        print(f"\n  OpenAI API runner [Chat Completions]: model={self.model}, max_turns={max_turns}")
         print(f"  Prompt length: {len(prompt)} chars")
         print(f"  --- agent conversation below ---\n", flush=True)
 
@@ -177,20 +209,132 @@ class OpenAIAgentRunner:
                 })
 
         result.duration_seconds = round(time.time() - start_time, 1)
-
-        print(f"\n  --- agent conversation above ---")
-        print(f"  Turns: {result.turns}, Tool calls: {result.tool_calls_count}")
-        print(f"  Tokens: {result.total_tokens:,} (in:{result.input_tokens:,} out:{result.output_tokens:,})")
-        print(f"  Duration: {result.duration_seconds}s")
-
+        _print_run_summary(result)
         result.findings_data = _extract_findings_json(result.raw_final_message)
-        if result.findings_data:
-            print(f"  Findings extracted: {len(result.findings_data.get('findings', []))} findings")
-        else:
-            print(f"  WARNING: Could not extract findings JSON from agent output")
-            result.returncode = 1
-
+        _print_findings_summary(result)
         return result
+
+    # ------------------------------------------------------------------
+    # Responses API (gpt-5-codex, codex-mini-latest, etc.)
+    # ------------------------------------------------------------------
+
+    def _run_responses(self, prompt: str, max_turns: int = 40) -> AgentResult:
+        result = AgentResult()
+        result.model = self.model
+        start_time = time.time()
+
+        tool_defs = self.registry.responses_definitions()
+
+        print(f"\n  OpenAI API runner [Responses]: model={self.model}, max_turns={max_turns}")
+        print(f"  Prompt length: {len(prompt)} chars")
+        print(f"  --- agent conversation below ---\n", flush=True)
+
+        input_items = [{"type": "message", "role": "user", "content": prompt}]
+        previous_response_id = None
+
+        for turn in range(max_turns):
+            result.turns = turn + 1
+
+            try:
+                kwargs = {
+                    "model": self.model,
+                    "instructions": SYSTEM_PROMPT,
+                    "tools": tool_defs,
+                }
+                if previous_response_id:
+                    kwargs["previous_response_id"] = previous_response_id
+                    kwargs["input"] = input_items
+                else:
+                    kwargs["input"] = input_items
+
+                response = self.client.responses.create(**kwargs)
+            except Exception as e:
+                print(f"\n  ERROR: API call failed: {e}")
+                result.returncode = 1
+                break
+
+            previous_response_id = response.id
+
+            if response.usage:
+                result.input_tokens += response.usage.input_tokens
+                result.output_tokens += response.usage.output_tokens
+                result.total_tokens += response.usage.input_tokens + response.usage.output_tokens
+
+            print(f"\n{'='*80}", flush=True)
+            print(f"  Turn {turn + 1}  |  status={response.status}", flush=True)
+            print(f"{'='*80}", flush=True)
+
+            function_calls = []
+            for item in response.output:
+                if item.type == "message":
+                    for content in item.content:
+                        if hasattr(content, "text"):
+                            text = content.text
+                            result.raw_final_message = text
+                            if len(text) > 3000:
+                                print(f"\n  [Assistant response — {len(text)} chars, showing first 3000]\n", flush=True)
+                                print(text[:3000], flush=True)
+                                print(f"\n  ... [{len(text) - 3000} more chars — full JSON in findings.json]\n", flush=True)
+                            else:
+                                print(f"\n{text}\n", flush=True)
+                elif item.type == "function_call":
+                    function_calls.append(item)
+
+            if not function_calls:
+                print(f"  >>> Agent finished. <<<", flush=True)
+                break
+
+            input_items = []
+            for fc in function_calls:
+                result.tool_calls_count += 1
+                fn_name = fc.name
+                try:
+                    fn_args = json.loads(fc.arguments)
+                except json.JSONDecodeError:
+                    fn_args = {}
+
+                print(f"\n  >> Tool call: {fn_name}({_summarize_args(fn_args)})", flush=True)
+
+                try:
+                    tool_result = self.registry.dispatch(fn_name, fn_args)
+                except Exception as e:
+                    tool_result = json.dumps({"error": str(e), "type": type(e).__name__})
+                    print(f"     ERROR: {e}", flush=True)
+
+                preview = tool_result[:500]
+                if len(tool_result) > 500:
+                    preview += f"\n     ... [{len(tool_result) - 500} more chars]"
+                print(f"     Result: {preview}", flush=True)
+
+                if len(tool_result) > 30000:
+                    tool_result = tool_result[:30000] + "\n... [truncated, too large]"
+
+                input_items.append({
+                    "type": "function_call_output",
+                    "call_id": fc.call_id,
+                    "output": tool_result,
+                })
+
+        result.duration_seconds = round(time.time() - start_time, 1)
+        _print_run_summary(result)
+        result.findings_data = _extract_findings_json(result.raw_final_message)
+        _print_findings_summary(result)
+        return result
+
+
+def _print_run_summary(result: AgentResult):
+    print(f"\n  --- agent conversation above ---")
+    print(f"  Turns: {result.turns}, Tool calls: {result.tool_calls_count}")
+    print(f"  Tokens: {result.total_tokens:,} (in:{result.input_tokens:,} out:{result.output_tokens:,})")
+    print(f"  Duration: {result.duration_seconds}s")
+
+
+def _print_findings_summary(result: AgentResult):
+    if result.findings_data:
+        print(f"  Findings extracted: {len(result.findings_data.get('findings', []))} findings")
+    else:
+        print(f"  WARNING: Could not extract findings JSON from agent output")
+        result.returncode = 1
 
 
 def _summarize_args(args: dict) -> str:

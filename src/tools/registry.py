@@ -29,8 +29,21 @@ class ToolRegistry:
         return self._tools.get(name)
 
     def openai_definitions(self) -> List[dict]:
+        """Tool definitions for Chat Completions API."""
         return [
             {"type": "function", "function": {"name": t.name, **t.schema}}
+            for t in self._tools.values()
+        ]
+
+    def responses_definitions(self) -> List[dict]:
+        """Tool definitions for Responses API."""
+        return [
+            {
+                "type": "function",
+                "name": t.name,
+                "description": t.schema.get("description", ""),
+                "parameters": t.schema.get("parameters", {}),
+            }
             for t in self._tools.values()
         ]
 
