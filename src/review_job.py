@@ -64,7 +64,20 @@ class ReviewJob:
 
     def create_findings(self) -> Path:
         """Run the agent and write findings.json. Returns the path."""
-        prompt = self._build_prompt()
+        # Pre-fetch PR data so changed_files can be injected into the prompt
+        changed_files = []
+        try:
+            from activities.fetch_pr_details_activity import FetchPRDetailsActivity
+            from models.review_models import FetchPRDetailsInput
+            pr_details = FetchPRDetailsActivity(self.settings).execute(
+                FetchPRDetailsInput(pr_id=self.config.pr_id, repository_id=self.config.repo)
+            )
+            changed_files = pr_details.file_changes
+            print(f"  Pre-fetched PR data: {len(changed_files)} changed files.")
+        except Exception as exc:
+            print(f"  PR pre-fetch skipped: {exc}")
+
+        prompt = self._build_prompt(changed_files=changed_files)
 
         # Phase 0: Build code graph (best-effort)
         graph_store = None
@@ -83,7 +96,7 @@ class ReviewJob:
             pr_id=self.config.pr_id,
             repo=self.config.repo,
             graph_store=graph_store,
-            changed_files=[],
+            changed_files=[fc.path for fc in changed_files],
         )
 
         self._agent_result = runner.run(prompt, max_turns=self.config.max_turns)
@@ -137,7 +150,7 @@ class ReviewJob:
     # Internals
     # ------------------------------------------------------------------
 
-    def _build_prompt(self) -> str:
+    def _build_prompt(self, changed_files=None) -> str:
         if self.config.prompt_text:
             text = self.config.prompt_text
         else:
@@ -149,7 +162,46 @@ class ReviewJob:
         text = text.replace("$REPO", self.config.repo)
         text = text.replace("$VCS", self.config.vcs)
 
+        if changed_files:
+            text += self._build_changed_files_section(changed_files)
+
         return text
+
+    def _build_changed_files_section(self, file_changes) -> str:
+        """Build the pre-fetched PR data section to append to the prompt."""
+        MAX_FILES = 100
+        sorted_changes = sorted(
+            file_changes,
+            key=lambda fc: fc.additions + fc.deletions,
+            reverse=True,
+        )
+        truncated = len(sorted_changes) > MAX_FILES
+        display = sorted_changes[:MAX_FILES]
+
+        lines = [
+            "",
+            "---",
+            "",
+            "## Pre-fetched PR Data",
+            "",
+            f"The following {len(file_changes)} file(s) were changed in this PR (pre-fetched to save turns):",
+            "",
+            "| File | Change | +Lines | -Lines |",
+            "|------|--------|--------|--------|",
+        ]
+        for fc in display:
+            lines.append(f"| `{fc.path}` | {fc.change_type} | {fc.additions} | {fc.deletions} |")
+
+        if truncated:
+            omitted = len(sorted_changes) - MAX_FILES
+            lines.append(f"| ... | | | | _(and {omitted} more files — top {MAX_FILES} by change volume shown)_")
+
+        lines += [
+            "",
+            "Use these paths with `get_change_analysis`. Do NOT call `get_pr` — the data is already above.",
+            "",
+        ]
+        return "\n".join(lines)
 
     def _stamp_usage(self, result: AgentResult):
         result.findings_data["usage"] = {
