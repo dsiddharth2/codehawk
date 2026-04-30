@@ -1,91 +1,64 @@
-# Agent Prompt Strategy Fix — Phase 2 Review
+# Agent Prompt Strategy Fix — Phase 3 Review
 
 **Reviewer:** codehawk-reviewer
-**Date:** 2026-04-30T12:15:00+05:30
-**Phase:** Phase 2 — Data Flow + System Prompt
+**Date:** 2026-04-30T12:45:00+05:30
+**Phase:** Phase 3 — Review Prompt Updates
 **Verdict:** APPROVED
 
 > See the recent git history of this file to understand the context of this review.
 
 ---
 
-## Task 4: Pre-fetch PR Data
+## Task 6: Mandatory Step 2b
+
 **PASS**
 
-The implementation in `src/review_job.py` correctly pre-fetches PR data via `FetchPRDetailsActivity` before building the prompt or constructing the runner. Key observations:
+The T1-T2 skip clause has been fully removed. The original line "For T1-T2 PRs: skip this step (full review is cheap enough)" is gone from the file, along with the adjacent "For T3+ PRs: focus your review budget..." bullet. The heading was correctly renamed from "Step 2b — Analyze Change Impact (if graph tools available)" to "Step 2b — Analyze Change Impact (MANDATORY when graph tools available)" — the emphasis is clear and unambiguous.
 
-1. **Pattern alignment:** The `FetchPRDetailsActivity` instantiation (`review_job.py:72-74`) follows the same pattern used in `conftest.py:82-83` — create the activity with `self.settings`, call `.execute()` with a `FetchPRDetailsInput`. Correct.
+The new mandatory framing reads well: "This step is REQUIRED for all PRs where graph tools are available" followed by a direct instruction to call `get_change_analysis` with file paths from "the PR Data section above." This phrasing correctly references the Pre-fetched PR Data section injected by Task 4 (Phase 2), which provides the changed file list up-front.
 
-2. **Best-effort try/except:** The entire pre-fetch block (`review_job.py:69-78`) is wrapped in a broad `try/except Exception`, which is appropriate here. If the ADO API call fails, the pipeline falls back to `changed_files=[]` and continues — the agent just won't have the pre-fetched file list. The `print()` on failure provides diagnostic visibility.
+The ranked review plan rule is present: "review files with `risk_score > 0.5` first, then files with `test_gaps`, then remaining files in priority order." This matches the requirements spec exactly. The fallback clause ("If the tool returns an error or is unavailable, continue to Step 3 normally") is retained — correct, since it provides resilience without undermining the mandatory posture.
 
-3. **100-file truncation:** `_build_changed_files_section()` (`review_job.py:170-204`) sorts file changes by `additions + deletions` descending and truncates to the top 100. The omitted count is correctly calculated as `len(sorted_changes) - MAX_FILES`. The markdown table format is clean and parseable by the LLM.
+No formatting issues. Logical flow from Step 2 → Step 2b → Step 3 is clean.
 
-4. **Data flow to runner:** `changed_files` is passed both to `_build_prompt()` (as the raw `file_changes` objects for the table) and to the runner constructor (as `[fc.path for fc in changed_files]` — string paths). This dual use is correct: the prompt needs full metadata (path, change_type, additions, deletions), while the runner/graph tools just need paths.
+## Task 7: Tier-Based Strategy + Deadline Warning
 
-5. **Prompt instruction:** The closing line "Use these paths with `get_change_analysis`. Do NOT call `get_pr`" directly addresses the root cause — eliminating the bootstrapping problem where the agent wasted turns discovering file paths.
-
-6. **Minor note:** The truncated-row markdown (`review_job.py:197`) has 5 pipe-delimited columns but the header has 4. This is cosmetically imperfect in strict markdown rendering but functionally harmless — the LLM will parse the intent correctly. Not a blocker.
-
-## Task 5: Dynamic System Prompt
 **PASS**
 
-The `build_system_prompt()` function in `src/agents/openai_runner.py:27-71` replaces the old `SYSTEM_PROMPT` constant correctly. Key observations:
+The tier-based review depth table was added to Step 5, positioned after the re-push note and before the "For each file within your tier budget" instruction. This is the correct location — the agent reads its strategy before entering the per-file loop. The table matches the requirements spec:
 
-1. **Turn budget communication:** The prompt clearly states "You have {max_turns} turns total. Reserve the last 3 for producing findings JSON." This directly addresses Bug 4 from the requirements (no turn budget awareness).
+- T1-T2 (1–10 files): Read each file fully, graph optional — correct
+- T3 (11–25 files): Graph priorities, read top 15, skim rest via diffs — correct
+- T4 (26–50 files): Graph priorities, read top 10 high-risk, diffs for rest — correct
+- T5 (51+ files): Graph priorities, read top 8, `get_blast_radius` for cascading risks, diffs only — correct
 
-2. **Graph-first mandate (`has_graph=True`):** The graph strategy block (`openai_runner.py:30-35`) mandates `get_change_analysis` as the first tool call and explicitly forbids file-by-file reading. It references `get_blast_radius`, `get_callers`, and `get_dependents`. This is strong, directive language — a significant improvement over the old passive "instead of" framing.
+The budget rule is present: "Finish all file reading by turn {max_turns - 5}. Reserve the remaining turns for findings synthesis and writing output." The `{max_turns - 5}` placeholder is consistent with the PLAN.md spec. This is a literal template string in the markdown, not a dynamically resolved value — acceptable because the system prompt (Phase 2, Task 5) already injects the concrete turn budget, and the review prompt serves as a reinforcing heuristic.
 
-3. **No-graph fallback (`has_graph=False`):** The alternative block (`openai_runner.py:37-40`) redirects to `get_file_diff` and `search_code`. Appropriate — when graph tools aren't available, diffs are the next-best strategy for avoiding full-file reads.
+The Step 7 deadline warning is prominent and correctly positioned at the very top of the step:
 
-4. **`self.has_graph` flag:** Added at `openai_runner.py:111` as `self.has_graph = graph_store is not None`. Simple and correct.
+> **CRITICAL: If you are on turn 35+ (of 40), STOP reading files and produce findings NOW. Partial findings are infinitely better than no findings. Output what you have.**
 
-5. **Both run methods updated:** `_run_chat_completions` (`openai_runner.py:149`) and `_run_responses` (`openai_runner.py:306`) both call `build_system_prompt(max_turns, self.has_graph)`. No stale `SYSTEM_PROMPT` references remain.
+Bold formatting + "CRITICAL" prefix makes this unmissable. The specific numbers (35+ of 40) match the default `max_turns=40` configuration. This works in concert with the harness-level deadline injection at N-3 (Phase 1, Task 1).
 
-6. **Responses API note:** In `_run_responses`, the `build_system_prompt()` call happens inside the turn loop (`openai_runner.py:306`) rather than once before the loop. This means the system prompt is regenerated on every turn. While functionally correct (same inputs produce same output), it's a minor inefficiency. Not a blocker — the string generation cost is negligible compared to API calls.
+No markdown formatting issues. The table renders correctly.
 
-7. **Existing tool mapping preserved:** The "IMPORTANT tool mapping" section and the graph-tool fallback note are retained, ensuring backward compatibility with the agent's tool usage patterns.
+## Integration with Phases 1-2
 
-## Integration with Phase 1
 **PASS**
 
-Phase 1 (harness safety net — deadline injection, turn counter, fallback extraction) and Phase 2 (data flow + system prompt) integrate cleanly:
+The Phase 3 prompt changes align well with the earlier phases:
 
-1. **Layered budget awareness:** The agent now gets budget signals at three levels:
-   - System prompt: "You have N turns total" (Phase 2, Task 5)
-   - Tool results: "[Turn X/Y used. Z remaining.]" (Phase 1, Task 2)
-   - Deadline injection: Hard backstop at turn N-3 (Phase 1, Task 1)
-   This layering is exactly what the requirements called for.
+1. **Phase 1 (Harness Safety Net):** The Step 7 deadline warning ("turn 35+") complements the harness deadline injection at `max_turns - 3` (turn 37). The agent gets a soft prompt warning at 35 and a hard injected message at 37. Three layers of budget awareness: continuous turn counter in tool results (Task 2), prompt-level warning (Task 7), harness injection (Task 1).
 
-2. **Fallback chain intact:** If the agent ignores all budget signals and fails to produce findings:
-   - History scan picks up partial JSON from earlier turns (Phase 1, Task 3)
-   - Emergency findings synthesize a valid response (Phase 1, Task 3)
-   - `review_job.py:104-109` warns but doesn't crash (Phase 1, Task 3)
-   The pre-fetch data from Task 4 doesn't interfere with any of this — it's purely additive to the prompt.
+2. **Phase 2 (Data Flow + System Prompt):**
+   - Task 4 injects a "Pre-fetched PR Data" section into the prompt. Step 2b now references "the PR Data section above" — this cross-reference is correct and the agent can find the file list without discovering it via `get_pr`.
+   - Task 5's `build_system_prompt()` mandates graph-first strategy and states the turn budget. Step 2b reinforces this by making `get_change_analysis` mandatory. Step 5's tier table reinforces graph usage for T3+. No contradictions between system prompt and review prompt instructions.
+   - The system prompt's graph-first mandate ("Your FIRST tool call MUST be `get_change_analysis`") and Step 2b's mandatory framing are consistent — both push the agent toward graph tools immediately.
 
-3. **No conflicting instructions:** The system prompt's "Reserve the last 3 for producing findings JSON" aligns with the deadline injection at `turn == max_turns - 3`. Consistent messaging.
-
-4. **`changed_files` flows correctly through both phases:** Pre-fetched in `create_findings()`, passed to `_build_prompt()` for the table, and passed to the runner constructor for graph tool registration. The runner's Phase 1 safety nets (deadline, fallback) operate independently of this data flow.
-
-## Cross-Cutting Concerns
-**PASS**
-
-1. **Error handling:** Both new features are best-effort. PR pre-fetch failure falls back gracefully. The `build_system_prompt()` function is pure (no I/O, no exceptions) — it simply formats a string from its inputs.
-
-2. **Edge cases covered:**
-   - Empty `changed_files` (pre-fetch fails): no PR data section appended, `changed_files=[]` passed to runner. Agent proceeds without file list — same as before this change.
-   - `changed_files` with exactly 100 files: `truncated` is `False`, no "and N more" row. Correct.
-   - `changed_files` with 101+ files: top 100 by change volume shown, omitted count noted. Correct.
-   - `has_graph=False`: no-graph strategy used, no reference to graph tools. Correct.
-
-3. **Code quality:** Changes are minimal and focused. No unnecessary refactoring. Import-time side effects avoided (lazy imports inside try/except). Print statements for observability are consistent with the existing codebase style.
+3. **No regressions detected:** The review prompt still references the correct tool names (`get_change_analysis`, `get_blast_radius`, `get_callers`, `get_dependents`). The fallback clause in Step 2b aligns with the system prompt's fallback instruction ("If a graph tool returns an error, fall back to `search_code`").
 
 ---
 
 ## Summary
 
-**Both Task 4 and Task 5 pass review.** The implementation is clean, follows existing patterns, and integrates correctly with Phase 1's harness safety net.
-
-- **Task 4 (Pre-fetch PR Data):** Correctly plumbs `FetchPRDetailsActivity` data into the prompt and runner. Best-effort error handling. 100-file truncation works correctly.
-- **Task 5 (Dynamic System Prompt):** `build_system_prompt()` produces correct, directive prompts for both graph and no-graph scenarios. Turn budget is clearly communicated. Both API paths updated.
-- **Integration:** Phase 1 + Phase 2 work together without conflict. Three-layer budget awareness is solid.
-- **Deferred:** Unit tests for these changes (Tasks 8-9 in the plan) are scheduled for Phase 4.
+Both Task 6 and Task 7 pass review. The T1-T2 skip clause is fully removed, Step 2b is clearly mandatory, the tier table matches spec, the budget rule is present, and the deadline warning is prominent. All Phase 3 changes integrate cleanly with the harness safety net (Phase 1) and system prompt rewrite (Phase 2) — no contradictions, correct cross-references, and reinforcing layered budget awareness. No changes needed.
