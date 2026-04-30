@@ -123,17 +123,34 @@ class TestScanHistoryForFindings:
 # Tests — ReviewJob.create_findings() changed_files propagation
 # ---------------------------------------------------------------------------
 
+def _inject_activity_module(fetch_cls):
+    """Return a sys.modules patch dict that makes activities.fetch_pr_details_activity
+    importable inside create_findings() without requiring the real ADO SDK.
+
+    Also injects a mock models.review_models so FetchPRDetailsInput is constructable
+    even if the real module has unavailable dependencies.
+    """
+    mock_activity_mod = MagicMock()
+    mock_activity_mod.FetchPRDetailsActivity = fetch_cls
+
+    mock_models_mod = MagicMock()
+    mock_models_mod.FetchPRDetailsInput = MagicMock(return_value=MagicMock())
+
+    return {
+        "activities.fetch_pr_details_activity": mock_activity_mod,
+        "models.review_models": mock_models_mod,
+    }
+
+
 class TestChangedFilesPropagation:
     """Verify create_findings() pre-fetches PR data and passes it to the runner."""
 
     @patch("graph_builder.build_graph", return_value=None)
     @patch("review_job.OpenAIAgentRunner")
-    @patch("activities.fetch_pr_details_activity.FetchPRDetailsActivity")
-    def test_changed_files_passed_to_runner(
-        self, mock_fetch_cls, mock_runner_cls, _bg, tmp_path
-    ):
+    def test_changed_files_passed_to_runner(self, mock_runner_cls, _bg, tmp_path):
         from review_job import ReviewJob, ReviewJobConfig
 
+        mock_fetch_cls = MagicMock()
         file_changes = [
             _FakeFileChange("src/auth/login.py", additions=30, deletions=10),
             _FakeFileChange("src/api/users.py", additions=5, deletions=2),
@@ -158,7 +175,8 @@ class TestChangedFilesPropagation:
         )
         job = ReviewJob(config, settings=MagicMock())
 
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        with patch.dict("sys.modules", _inject_activity_module(mock_fetch_cls)), \
+             patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
             job.create_findings()
 
         init_kwargs = mock_runner_cls.call_args.kwargs
@@ -171,13 +189,11 @@ class TestChangedFilesPropagation:
 
     @patch("graph_builder.build_graph", return_value=None)
     @patch("review_job.OpenAIAgentRunner")
-    @patch("activities.fetch_pr_details_activity.FetchPRDetailsActivity")
-    def test_changed_files_empty_on_fetch_failure(
-        self, mock_fetch_cls, mock_runner_cls, _bg, tmp_path
-    ):
+    def test_changed_files_empty_on_fetch_failure(self, mock_runner_cls, _bg, tmp_path):
         """When pre-fetch throws, create_findings() continues with empty changed_files."""
         from review_job import ReviewJob, ReviewJobConfig
 
+        mock_fetch_cls = MagicMock()
         mock_fetch_cls.return_value.execute.side_effect = ConnectionError("ADO unreachable")
 
         mock_result = _make_agent_result()
@@ -195,7 +211,8 @@ class TestChangedFilesPropagation:
         )
         job = ReviewJob(config, settings=MagicMock())
 
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        with patch.dict("sys.modules", _inject_activity_module(mock_fetch_cls)), \
+             patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
             job.create_findings()  # must not raise
 
         init_kwargs = mock_runner_cls.call_args.kwargs
@@ -203,13 +220,11 @@ class TestChangedFilesPropagation:
 
     @patch("graph_builder.build_graph", return_value=None)
     @patch("review_job.OpenAIAgentRunner")
-    @patch("activities.fetch_pr_details_activity.FetchPRDetailsActivity")
-    def test_prompt_contains_changed_files_section(
-        self, mock_fetch_cls, mock_runner_cls, _bg, tmp_path
-    ):
+    def test_prompt_contains_changed_files_section(self, mock_runner_cls, _bg, tmp_path):
         """When changed_files are available, prompt must include Pre-fetched PR Data section."""
         from review_job import ReviewJob, ReviewJobConfig
 
+        mock_fetch_cls = MagicMock()
         file_changes = [_FakeFileChange("src/foo.py")]
         mock_pr = MagicMock()
         mock_pr.file_changes = file_changes
@@ -230,7 +245,8 @@ class TestChangedFilesPropagation:
         )
         job = ReviewJob(config, settings=MagicMock())
 
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        with patch.dict("sys.modules", _inject_activity_module(mock_fetch_cls)), \
+             patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
             job.create_findings()
 
         prompt_arg = mock_runner.run.call_args.args[0]
@@ -288,13 +304,11 @@ class TestEmergencyFindingsSchema:
 
     @patch("graph_builder.build_graph", return_value=None)
     @patch("review_job.OpenAIAgentRunner")
-    @patch("activities.fetch_pr_details_activity.FetchPRDetailsActivity")
-    def test_create_findings_writes_valid_json(
-        self, mock_fetch_cls, mock_runner_cls, _bg, tmp_path
-    ):
+    def test_create_findings_writes_valid_json(self, mock_runner_cls, _bg, tmp_path):
         """findings.json produced by create_findings() must be valid JSON with required keys."""
         from review_job import ReviewJob, ReviewJobConfig
 
+        mock_fetch_cls = MagicMock()
         mock_fetch_cls.return_value.execute.side_effect = RuntimeError("skip")
 
         mock_result = _make_agent_result(pr_id=7, repo="SomeRepo")
@@ -312,7 +326,8 @@ class TestEmergencyFindingsSchema:
         )
         job = ReviewJob(config, settings=MagicMock())
 
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        with patch.dict("sys.modules", _inject_activity_module(mock_fetch_cls)), \
+             patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
             findings_path = job.create_findings()
 
         assert findings_path.exists()

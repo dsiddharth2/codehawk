@@ -161,6 +161,26 @@ class TestBuildSystemPrompt:
 # Tests — deadline injection in chat completions loop
 # ---------------------------------------------------------------------------
 
+def _snapshot_side_effect(mock_client, responses):
+    """Wire up a side_effect that snapshots messages at each call.
+
+    The runner mutates the same `messages` list in-place, so entries in
+    call_args_list all reference the same (final-state) object.  Capturing
+    a shallow copy at call time is the only way to see the state at each turn.
+
+    Returns the snapshots list (populated after the run completes).
+    """
+    snapshots = []
+    queue = list(responses)
+
+    def _side_effect(**kwargs):
+        snapshots.append(list(kwargs["messages"]))
+        return queue.pop(0)
+
+    mock_client.chat.completions.create.side_effect = _side_effect
+    return snapshots
+
+
 class TestDeadlineInjectionChatCompletions:
     @patch("agents.openai_runner.register_workspace_tools")
     @patch("agents.openai_runner.register_vcs_tools")
@@ -174,22 +194,19 @@ class TestDeadlineInjectionChatCompletions:
 
         max_turns = 6  # deadline fires at turn index 3 (== 6 - 3)
 
-        # Turns 0-2: tool_calls; turn 3 (N-3): stop with findings JSON
         responses = [
             _make_chat_response("tool_calls"),
             _make_chat_response("tool_calls"),
             _make_chat_response("tool_calls"),
             _make_chat_response("stop", content=SAMPLE_FINDINGS_TEXT, tool_calls=[]),
         ]
-        mock_client.chat.completions.create.side_effect = responses
+        snapshots = _snapshot_side_effect(mock_client, responses)
 
         runner._run_chat_completions("test prompt", max_turns=max_turns)
 
-        calls = mock_client.chat.completions.create.call_args_list
-        # At turn N-3 (index 3), messages must include the deadline injection
-        messages_at_deadline = calls[3].kwargs["messages"]
+        # snapshots[3] is the messages list as it was when the turn-N-3 call was made
         deadline_count = sum(
-            1 for m in messages_at_deadline
+            1 for m in snapshots[3]
             if DEADLINE_PHRASE in (m.get("content") or "")
         )
         assert deadline_count == 1, (
@@ -214,16 +231,14 @@ class TestDeadlineInjectionChatCompletions:
             _make_chat_response("tool_calls"),
             _make_chat_response("stop", content=SAMPLE_FINDINGS_TEXT, tool_calls=[]),
         ]
-        mock_client.chat.completions.create.side_effect = responses
+        snapshots = _snapshot_side_effect(mock_client, responses)
 
         runner._run_chat_completions("test prompt", max_turns=max_turns)
 
-        calls = mock_client.chat.completions.create.call_args_list
-        # Turns 0, 1, 2 must NOT contain the deadline phrase
+        # snapshots[0..2] are before the deadline turn — must be free of the phrase
         for i in range(max_turns - 3):
-            messages = calls[i].kwargs["messages"]
             early_deadline = [
-                m for m in messages
+                m for m in snapshots[i]
                 if DEADLINE_PHRASE in (m.get("content") or "")
             ]
             assert early_deadline == [], (
