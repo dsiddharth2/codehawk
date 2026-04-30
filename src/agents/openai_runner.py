@@ -408,6 +408,34 @@ def _summarize_args(args: dict) -> str:
     return ", ".join(parts)
 
 
+def _brace_balanced_extract(text: str, keyword: str) -> list[str]:
+    """Return all brace-balanced substrings of text that start with '{' and contain keyword."""
+    results = []
+    n = len(text)
+    i = 0
+    while i < n:
+        if text[i] == "{":
+            depth = 0
+            j = i
+            while j < n:
+                if text[j] == "{":
+                    depth += 1
+                elif text[j] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidate = text[i : j + 1]
+                        if keyword in candidate:
+                            results.append(candidate)
+                        i = j + 1
+                        break
+                j += 1
+            else:
+                i += 1
+        else:
+            i += 1
+    return results
+
+
 def _scan_history_for_findings(texts: list[str]) -> Optional[dict]:
     """Scan a list of assistant message texts for JSON blocks containing findings data."""
     candidates = []
@@ -417,11 +445,10 @@ def _scan_history_for_findings(texts: list[str]) -> Optional[dict]:
         # Look for json code fence blocks
         for m in re.finditer(r'```(?:json)?\s*\n(\{.*?\})\s*\n```', text, re.DOTALL):
             block = m.group(1)
-            if '"findings"' in block or '"cr-"' in block or re.search(r'"cr-\w+', block):
+            if '"findings"' in block or re.search(r'"cr-\w+', block):
                 candidates.append(block)
-        # Look for bare JSON objects with findings or cr- pattern
-        for m in re.finditer(r'(\{[^{}]*"findings"[^{}]*\})', text, re.DOTALL):
-            candidates.append(m.group(1))
+        # Look for bare JSON objects with findings key (brace-balanced to handle nesting)
+        candidates.extend(_brace_balanced_extract(text, '"findings"'))
 
     # Try candidates from last to first (prefer most recent), pick largest valid one
     best = None

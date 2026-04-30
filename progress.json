@@ -8,9 +8,9 @@
       "tasks": [
         {"id": "task-1", "title": "Deadline injection at turn N-3", "status": "completed", "notes": "Injected deadline user message in both _run_chat_completions and _run_responses loops when turn == max_turns - 3."},
         {"id": "task-2", "title": "Turn-count reporting in tool results", "status": "completed", "notes": "Appended [Turn X/Y used. Z remaining.] suffix to every tool result in both loops."},
-        {"id": "task-3", "title": "Fallback extraction + emergency findings", "status": "completed", "notes": "Added _scan_history_for_findings() to scan assistant messages for partial JSON. Emergency findings synthesized when scan also fails. RuntimeError in review_job.py replaced with warnings.warn(). pr_id and repo stored on runner instance."}
+        {"id": "task-3", "title": "Fallback extraction + emergency findings", "status": "completed", "notes": "Added _scan_history_for_findings() to scan assistant messages for partial JSON. Emergency findings synthesized when scan also fails. RuntimeError in review_job.py replaced with warnings.warn(). pr_id and repo stored on runner instance. Fix: replaced broken [^{}]* bare-JSON regex with _brace_balanced_extract() to correctly handle nested JSON objects."}
       ],
-      "verify": {"status": "blocked", "notes": "Code committed (421b131) and pushed to origin/fix/agent-prompt-strategy. pytest blocked by permission model — requires PM to run: python -m pytest tests/unit/ -v"}
+      "verify": {"status": "blocked", "notes": "Code committed and pushed to origin/fix/agent-prompt-strategy. Task 3 regex fix applied per review feedback. pytest blocked by permission model — requires PM to run: python -m pytest tests/unit/ -v"}
     },
     {
       "name": "Phase 2: Data Flow + System Prompt",

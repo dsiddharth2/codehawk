@@ -81,6 +81,8 @@ The code-fence path works correctly for the most common case (agent outputs find
 - "Unit test covers both history-scan and emergency paths" — **Not met** (no tests in this commit; deferred to Phase 4 Task 8-9, which is acceptable per the plan).
 - History scan correctness for bare JSON — **Not met** (regex bug).
 
+**Doer:** fixed in commit — replaced broken `[^{}]*` bare-JSON regex with `_brace_balanced_extract()`, a brace-depth tracker that correctly collects nested JSON objects containing `"findings"`. Also removed the redundant `'"cr-"' in block` literal check; the `re.search(r'"cr-\w+"')` on the same line already handles finding IDs correctly.
+
 ---
 
 ## Cross-Cutting Concerns
