@@ -15,10 +15,10 @@
     {
       "name": "Phase 2: Data Flow + System Prompt",
       "tasks": [
-        {"id": "task-4", "title": "Pre-fetch PR data and inject changed_files", "status": "pending", "notes": ""},
-        {"id": "task-5", "title": "Rewrite SYSTEM_PROMPT as build_system_prompt()", "status": "pending", "notes": ""}
+        {"id": "task-4", "title": "Pre-fetch PR data and inject changed_files", "status": "completed", "notes": "Added pre-fetch of FetchPRDetailsActivity in create_findings() before building prompt. Passes actual file_changes to _build_prompt() and runner (replacing changed_files=[]). Added _build_changed_files_section() appending a Pre-fetched PR Data table (top 100 files by change volume) with instruction to use get_change_analysis and NOT call get_pr."},
+        {"id": "task-5", "title": "Rewrite SYSTEM_PROMPT as build_system_prompt()", "status": "completed", "notes": "Replaced SYSTEM_PROMPT constant with build_system_prompt(max_turns, has_graph) -> str. States turn budget. When has_graph=True mandates graph-first strategy (first call must be get_change_analysis, no file-by-file reading). When has_graph=False instructs get_file_diff / search_code. Added self.has_graph = graph_store is not None in __init__. Updated both run methods to call build_system_prompt(max_turns, self.has_graph)."}
       ],
-      "verify": {"status": "pending", "notes": ""}
+      "verify": {"status": "blocked", "notes": "Code committed and pushed to origin/fix/agent-prompt-strategy. pytest blocked by permission model — requires PM to run: python -m pytest tests/unit/ -v"}
     },
     {
       "name": "Phase 3: Review Prompt Updates",
