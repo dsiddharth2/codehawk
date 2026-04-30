@@ -26,7 +26,7 @@
         {"id": "task-6", "title": "Make Step 2b mandatory, remove T1-T2 skip", "status": "completed", "notes": "Renamed heading to MANDATORY, removed T1-T2 skip clause, added REQUIRED statement, changed instruction to explicitly call get_change_analysis with PR Data section paths, added ranked review plan rule (risk_score > 0.5 first, then test_gaps, then remainder)."},
         {"id": "task-7", "title": "Tier-based review strategy + deadline warning", "status": "completed", "notes": "Added tier-based review depth table to Step 5 preamble (T1-T2 read all, T3 top-15+diffs, T4 top-10+diffs, T5 top-8+blast_radius+diffs). Added budget rule: finish reading by turn {max_turns - 5}. Added CRITICAL deadline warning at top of Step 7: stop reading at turn 35+ and produce findings immediately."}
       ],
-      "verify": {"status": "pending", "notes": ""}
+      "verify": {"status": "blocked", "notes": "Code committed and pushed to origin/fix/agent-prompt-strategy. Prompt changes do not affect Python tests. requires PM to run: python -m pytest tests/ -v and manually review prompt text in commands/review-pr-core.md for consistency."}
     },
     {
       "name": "Phase 4: Test Coverage",
