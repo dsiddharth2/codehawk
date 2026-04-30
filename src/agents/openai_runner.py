@@ -85,6 +85,8 @@ class OpenAIAgentRunner:
         self.settings = settings
         self.workspace = Path(workspace)
         self.model = model
+        self.pr_id = pr_id
+        self.repo = repo
 
         api_key = os.environ.get("OPENAI_API_KEY", "")
         if not api_key:
@@ -134,6 +136,15 @@ class OpenAIAgentRunner:
 
         for turn in range(max_turns):
             result.turns = turn + 1
+
+            if turn == max_turns - 3:
+                deadline_msg = (
+                    "DEADLINE: You have 3 turns remaining. You MUST output your findings JSON NOW. "
+                    "Do not make any more tool calls. Produce the ```json findings block immediately "
+                    "with whatever findings you have collected so far. Partial output is required."
+                )
+                messages.append({"role": "user", "content": deadline_msg})
+                print(f"  [DEADLINE INJECTION: turn {turn + 1}, 3 turns remaining]", flush=True)
 
             try:
                 response = self.client.chat.completions.create(
@@ -202,6 +213,9 @@ class OpenAIAgentRunner:
                 if len(tool_result) > 30000:
                     tool_result = tool_result[:30000] + "\n... [truncated, too large]"
 
+                remaining = max_turns - (turn + 1)
+                tool_result += f"\n[Turn {turn + 1}/{max_turns} used. {remaining} remaining.]"
+
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
@@ -211,6 +225,25 @@ class OpenAIAgentRunner:
         result.duration_seconds = round(time.time() - start_time, 1)
         _print_run_summary(result)
         result.findings_data = _extract_findings_json(result.raw_final_message)
+        if result.findings_data is None:
+            print("  [Fallback] Scanning conversation history for partial findings...", flush=True)
+            assistant_texts = [
+                msg.get("content") or ""
+                for msg in messages
+                if isinstance(msg, dict) and msg.get("role") == "assistant"
+            ]
+            result.findings_data = _scan_history_for_findings(assistant_texts)
+        if result.findings_data is None:
+            print("  [Emergency] Synthesizing minimal findings — agent exhausted turn budget.", flush=True)
+            result.findings_data = {
+                "pr_id": self.pr_id,
+                "repo": self.repo,
+                "vcs": "ado",
+                "review_modes": ["standard"],
+                "findings": [],
+                "fix_verifications": [],
+                "error": "Agent exhausted turn budget without producing findings",
+            }
         _print_findings_summary(result)
         return result
 
@@ -231,9 +264,19 @@ class OpenAIAgentRunner:
 
         input_items = [{"type": "message", "role": "user", "content": prompt}]
         previous_response_id = None
+        all_assistant_texts: list[str] = []
 
         for turn in range(max_turns):
             result.turns = turn + 1
+
+            if turn == max_turns - 3:
+                deadline_msg = (
+                    "DEADLINE: You have 3 turns remaining. You MUST output your findings JSON NOW. "
+                    "Do not make any more tool calls. Produce the ```json findings block immediately "
+                    "with whatever findings you have collected so far. Partial output is required."
+                )
+                input_items.append({"type": "message", "role": "user", "content": deadline_msg})
+                print(f"  [DEADLINE INJECTION: turn {turn + 1}, 3 turns remaining]", flush=True)
 
             try:
                 kwargs = {
@@ -271,6 +314,7 @@ class OpenAIAgentRunner:
                         if hasattr(content, "text"):
                             text = content.text
                             result.raw_final_message = text
+                            all_assistant_texts.append(text)
                             if len(text) > 3000:
                                 print(f"\n  [Assistant response — {len(text)} chars, showing first 3000]\n", flush=True)
                                 print(text[:3000], flush=True)
@@ -309,6 +353,9 @@ class OpenAIAgentRunner:
                 if len(tool_result) > 30000:
                     tool_result = tool_result[:30000] + "\n... [truncated, too large]"
 
+                remaining = max_turns - (turn + 1)
+                tool_result += f"\n[Turn {turn + 1}/{max_turns} used. {remaining} remaining.]"
+
                 input_items.append({
                     "type": "function_call_output",
                     "call_id": fc.call_id,
@@ -318,6 +365,20 @@ class OpenAIAgentRunner:
         result.duration_seconds = round(time.time() - start_time, 1)
         _print_run_summary(result)
         result.findings_data = _extract_findings_json(result.raw_final_message)
+        if result.findings_data is None:
+            print("  [Fallback] Scanning conversation history for partial findings...", flush=True)
+            result.findings_data = _scan_history_for_findings(all_assistant_texts)
+        if result.findings_data is None:
+            print("  [Emergency] Synthesizing minimal findings — agent exhausted turn budget.", flush=True)
+            result.findings_data = {
+                "pr_id": self.pr_id,
+                "repo": self.repo,
+                "vcs": "ado",
+                "review_modes": ["standard"],
+                "findings": [],
+                "fix_verifications": [],
+                "error": "Agent exhausted turn budget without producing findings",
+            }
         _print_findings_summary(result)
         return result
 
@@ -345,6 +406,33 @@ def _summarize_args(args: dict) -> str:
             s = s[:57] + "..."
         parts.append(f"{k}={s}")
     return ", ".join(parts)
+
+
+def _scan_history_for_findings(texts: list[str]) -> Optional[dict]:
+    """Scan a list of assistant message texts for JSON blocks containing findings data."""
+    candidates = []
+    for text in texts:
+        if not text:
+            continue
+        # Look for json code fence blocks
+        for m in re.finditer(r'```(?:json)?\s*\n(\{.*?\})\s*\n```', text, re.DOTALL):
+            block = m.group(1)
+            if '"findings"' in block or '"cr-"' in block or re.search(r'"cr-\w+', block):
+                candidates.append(block)
+        # Look for bare JSON objects with findings or cr- pattern
+        for m in re.finditer(r'(\{[^{}]*"findings"[^{}]*\})', text, re.DOTALL):
+            candidates.append(m.group(1))
+
+    # Try candidates from last to first (prefer most recent), pick largest valid one
+    best = None
+    for block in reversed(candidates):
+        try:
+            data = json.loads(block)
+            if best is None or len(block) > len(json.dumps(best)):
+                best = data
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return best
 
 
 def _extract_findings_json(text: str) -> Optional[dict]:

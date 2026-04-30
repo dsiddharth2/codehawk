@@ -89,7 +89,11 @@ class ReviewJob:
         self._agent_result = runner.run(prompt, max_turns=self.config.max_turns)
 
         if not self._agent_result.findings_data:
-            raise RuntimeError("Agent did not produce extractable findings JSON")
+            import warnings
+            warnings.warn(
+                "Agent did not produce extractable findings JSON; emergency findings were generated.",
+                stacklevel=2,
+            )
 
         self._stamp_usage(self._agent_result)
         self._write_findings(self._agent_result.findings_data)

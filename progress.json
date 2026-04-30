@@ -1,0 +1,41 @@
+{
+  "project": "CodeHawk Agent Prompt Strategy Fix",
+  "branch": "fix/agent-prompt-strategy",
+  "base_branch": "main",
+  "phases": [
+    {
+      "name": "Phase 1: Harness Safety Net",
+      "tasks": [
+        {"id": "task-1", "title": "Deadline injection at turn N-3", "status": "completed", "notes": "Injected deadline user message in both _run_chat_completions and _run_responses loops when turn == max_turns - 3."},
+        {"id": "task-2", "title": "Turn-count reporting in tool results", "status": "completed", "notes": "Appended [Turn X/Y used. Z remaining.] suffix to every tool result in both loops."},
+        {"id": "task-3", "title": "Fallback extraction + emergency findings", "status": "completed", "notes": "Added _scan_history_for_findings() to scan assistant messages for partial JSON. Emergency findings synthesized when scan also fails. RuntimeError in review_job.py replaced with warnings.warn()."}
+      ],
+      "verify": {"status": "pending", "notes": ""}
+    },
+    {
+      "name": "Phase 2: Data Flow + System Prompt",
+      "tasks": [
+        {"id": "task-4", "title": "Pre-fetch PR data and inject changed_files", "status": "pending", "notes": ""},
+        {"id": "task-5", "title": "Rewrite SYSTEM_PROMPT as build_system_prompt()", "status": "pending", "notes": ""}
+      ],
+      "verify": {"status": "pending", "notes": ""}
+    },
+    {
+      "name": "Phase 3: Review Prompt Updates",
+      "tasks": [
+        {"id": "task-6", "title": "Make Step 2b mandatory, remove T1-T2 skip", "status": "pending", "notes": ""},
+        {"id": "task-7", "title": "Tier-based review strategy + deadline warning", "status": "pending", "notes": ""}
+      ],
+      "verify": {"status": "pending", "notes": ""}
+    },
+    {
+      "name": "Phase 4: Test Coverage",
+      "tasks": [
+        {"id": "task-8", "title": "Unit tests for deadline injection and turn budget", "status": "pending", "notes": ""},
+        {"id": "task-9", "title": "Unit tests for changed_files and fallback extraction", "status": "pending", "notes": ""},
+        {"id": "task-10", "title": "Integration test cost control (15 turns cap)", "status": "pending", "notes": ""}
+      ],
+      "verify": {"status": "pending", "notes": ""}
+    }
+  ]
+}
