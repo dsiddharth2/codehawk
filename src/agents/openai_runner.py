@@ -24,9 +24,30 @@ from tools.vcs_tools import register_vcs_tools
 from tools.workspace_tools import register_workspace_tools
 
 
-SYSTEM_PROMPT = """\
+def build_system_prompt(max_turns: int, has_graph: bool) -> str:
+    """Build the system prompt dynamically based on turn budget and graph availability."""
+    graph_strategy = (
+        """\
+GRAPH-FIRST STRATEGY (graph tools are available):
+- Your FIRST tool call MUST be `get_change_analysis`. Use its output to prioritize your review.
+- Do NOT read files one-by-one. Use graph analysis to identify high-risk files, then read only those.
+- Use `get_blast_radius` for T5 PRs (51+ files) to find cascading risks.
+- Use `get_callers` / `get_dependents` for precise structural queries instead of `search_code`."""
+        if has_graph
+        else """\
+NO GRAPH AVAILABLE — use diffs instead of full file reads:
+- Use `get_file_diff` to review changes without reading entire files.
+- Use `search_code` for structural queries."""
+    )
+
+    return f"""\
 You are a code review agent. You have access to tools that let you fetch PR data, \
 read files, search code, and run git blame.
+
+TURN BUDGET: You have {max_turns} turns total. Reserve the last 3 for producing findings JSON. \
+Do not waste turns on redundant tool calls.
+
+{graph_strategy}
 
 IMPORTANT tool mapping — use these tools instead of shell commands:
 - Instead of `python vcs.py get-pr ...` → use the `get_pr` tool
@@ -87,6 +108,7 @@ class OpenAIAgentRunner:
         self.model = model
         self.pr_id = pr_id
         self.repo = repo
+        self.has_graph = graph_store is not None
 
         api_key = os.environ.get("OPENAI_API_KEY", "")
         if not api_key:
@@ -124,7 +146,7 @@ class OpenAIAgentRunner:
         start_time = time.time()
 
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": build_system_prompt(max_turns, self.has_graph)},
             {"role": "user", "content": prompt},
         ]
 
@@ -281,7 +303,7 @@ class OpenAIAgentRunner:
             try:
                 kwargs = {
                     "model": self.model,
-                    "instructions": SYSTEM_PROMPT,
+                    "instructions": build_system_prompt(max_turns, self.has_graph),
                     "tools": tool_defs,
                 }
                 if previous_response_id:
