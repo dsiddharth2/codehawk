@@ -31,11 +31,11 @@
     {
       "name": "Phase 4: Test Coverage",
       "tasks": [
-        {"id": "task-8", "title": "Unit tests for deadline injection and turn budget", "status": "pending", "notes": ""},
-        {"id": "task-9", "title": "Unit tests for changed_files and fallback extraction", "status": "pending", "notes": ""},
-        {"id": "task-10", "title": "Integration test cost control (15 turns cap)", "status": "pending", "notes": ""}
+        {"id": "task-8", "title": "Unit tests for deadline injection and turn budget", "status": "completed", "notes": "Created tests/unit/test_turn_budget.py. Covers: build_system_prompt() content (graph/no-graph, turn budget), deadline injection at N-3 in chat completions loop, deadline NOT injected before N-3, deadline injection in responses API loop, turn counter in tool results, emergency fallback when agent produces no JSON."},
+        {"id": "task-9", "title": "Unit tests for changed_files and fallback extraction", "status": "completed", "notes": "Created tests/unit/test_review_job.py. Covers: _scan_history_for_findings() (code fence, bare JSON, empty input, largest match, cr-id pattern, invalid JSON), create_findings() propagates non-empty changed_files to runner, graceful degradation on fetch failure, prompt Pre-fetched PR Data section present, emergency findings schema validity."},
+        {"id": "task-10", "title": "Integration test cost control (15 turns cap)", "status": "completed", "notes": "Added MAX_TURNS_INTEGRATION = 15 to tests/integration/conftest.py. Updated test_full_pipeline.py to import and use this constant instead of hardcoded 40. Reduces integration test token cost by ~62%."}
       ],
-      "verify": {"status": "pending", "notes": ""}
+      "verify": {"status": "blocked", "notes": "All 3 tasks committed and pushed to origin/fix/agent-prompt-strategy (commits 44daa86, dbc106a, 49cfd66). Full test suite run blocked by permission model — requires PM to run: python -m pytest tests/ --tb=short -v"}
     }
   ]
 }
