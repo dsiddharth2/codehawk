@@ -23,7 +23,7 @@
     {
       "name": "Phase 3: Review Prompt Updates",
       "tasks": [
-        {"id": "task-6", "title": "Make Step 2b mandatory, remove T1-T2 skip", "status": "pending", "notes": ""},
+        {"id": "task-6", "title": "Make Step 2b mandatory, remove T1-T2 skip", "status": "completed", "notes": "Renamed heading to MANDATORY, removed T1-T2 skip clause, added REQUIRED statement, changed instruction to explicitly call get_change_analysis with PR Data section paths, added ranked review plan rule (risk_score > 0.5 first, then test_gaps, then remainder)."},
         {"id": "task-7", "title": "Tier-based review strategy + deadline warning", "status": "pending", "notes": ""}
       ],
       "verify": {"status": "pending", "notes": ""}
