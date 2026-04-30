@@ -1,9 +1,9 @@
 # Agent Prompt Strategy Fix — Phase 1 Review
 
 **Reviewer:** codehawk-reviewer
-**Date:** 2026-04-30T18:30:00+05:30
+**Date:** 2026-04-30T19:00:00+05:30
 **Phase:** Phase 1 — Harness Safety Net
-**Verdict:** CHANGES NEEDED
+**Verdict:** APPROVED
 
 > See the recent git history of this file to understand the context of this review.
 
@@ -39,49 +39,35 @@ The suffix is appended *after* the 30K truncation check (lines 213-214 and 353-3
 
 ---
 
-## Task 3: Fallback Extraction — FAIL
+## Task 3: Fallback Extraction — PASS (after fix)
 
 The overall structure is correct: try `_extract_findings_json` on the final message, then scan history, then synthesize emergency findings. Both `_run_chat_completions` and `_run_responses` have this three-tier fallback. The `RuntimeError` in `review_job.py` is properly replaced with `warnings.warn()`. The `pr_id` and `repo` are stored on the runner instance. Emergency findings have all required fields (`pr_id`, `repo`, `vcs`, `review_modes`, `findings`, `fix_verifications`, `error`).
 
-However, there is a **bug in `_scan_history_for_findings`** that undermines the history-scanning fallback:
+### Initial finding (now resolved): Bare JSON regex could not match nested objects
 
-### Bug: Bare JSON regex cannot match nested objects
+The original implementation used `re.finditer(r'(\{[^{}]*"findings"[^{}]*\})', text, re.DOTALL)` which excluded curly braces via `[^{}]`, making it unable to match any nested JSON. This was flagged in the initial review.
 
-Line 423 uses the regex:
-```python
-re.finditer(r'(\{[^{}]*"findings"[^{}]*\})', text, re.DOTALL)
-```
+**Fix applied in commit `6c44117`:** Replaced the broken regex with `_brace_balanced_extract()`, a brace-depth tracking function that correctly collects nested JSON objects containing `"findings"`. Also removed the redundant `'"cr-"' in block` literal check — `re.search(r'"cr-\w+', block)` already handles finding IDs.
 
-The character class `[^{}]` excludes curly braces, meaning this regex can only match **flat** JSON objects with no nesting. A real findings JSON always has nested structures — `"findings": [{"id": "cr-001", ...}]` contains inner `{}` braces. This regex will never match an actual findings payload.
+### Re-review of `_brace_balanced_extract` (commit 6c44117)
 
-This means the bare-JSON fallback path is dead code. Only the code-fence regex (line 418) can produce candidates. If the agent outputs findings JSON outside a code fence (e.g., as raw text), the history scan will miss it entirely.
+The implementation is correct and handles key edge cases:
 
-**Fix:** Replace the bare JSON regex with a brace-balanced extraction or reuse the same approach as `_extract_findings_json` which uses `r'(\{[^{}]*"pr_id".*\})'` with `re.DOTALL` (which does cross brace boundaries via `.*`).
+- **Empty input:** `n=0`, loop never executes, returns `[]`. Correct.
+- **Malformed/unbalanced braces** (e.g., `{"findings": [`): The inner loop exhausts `j < n` without reaching `depth == 0`, falls to `else: i += 1`, advancing past the unmatched opening brace. No infinite loop. Correct.
+- **Deeply nested structures** (e.g., `{"a": {"b": {"findings": []}}}`): Depth tracks correctly (1->2->3->2->1->0), captures the full balanced substring. Correct.
+- **Multiple objects in one text**: Each balanced object is extracted independently. Only those containing the keyword are collected. Correct.
+- **Known limitation (acceptable):** Braces inside JSON string values (e.g., `{"findings": "text with { in it"}`) can cause miscounting. However, this is a degenerate case for findings JSON (which contains arrays/objects, not raw brace characters in strings), and any mismatched extraction would fail at `json.loads()` downstream. Acceptable tradeoff vs. implementing a full JSON-aware tokenizer.
 
-### Minor: Code-fence regex uses non-greedy `.*?`
+### Code-fence regex
 
-Line 418:
-```python
-re.finditer(r'```(?:json)?\s*\n(\{.*?\})\s*\n```', text, re.DOTALL)
-```
-
-The `.*?` (non-greedy) combined with the trailing anchor `\s*\n\`\`\`` will correctly match to the outermost `}` before the closing fence, so this works for well-formed code fences. However, if the agent outputs multiple code-fenced JSON blocks in a single message, the non-greedy match correctly captures each one individually. This is fine.
-
-### Minor: `"cr-"` literal check may miss findings
-
-Line 420 checks for `'"cr-"' in block` — this would only match the literal string `"cr-"` with a closing quote immediately after the hyphen. Real finding IDs like `"cr-001"` won't match this literal. The `re.search(r'"cr-\w+', block)` on the same line does handle this correctly though, so findings with IDs are still caught. The `'"cr-"'` check is simply dead/redundant.
-
-### Assessment
-
-The code-fence path works correctly for the most common case (agent outputs findings in a ````json` fence mid-conversation). The emergency fallback synthesizes valid findings. The bare-JSON fallback is broken but has low practical impact since agents almost always use code fences. The overall safety guarantee (pipeline never crashes) is **met** because the emergency fallback always produces valid findings.
+The code-fence regex `r'```(?:json)?\s*\n(\{.*?\})\s*\n```'` with `re.DOTALL` correctly matches findings inside fenced blocks. The non-greedy `.*?` combined with the closing-fence anchor resolves to the correct outermost `}` before the triple backticks.
 
 **Done-when check:**
 - "Pipeline never raises RuntimeError on missing findings" — **Met** (emergency fallback guarantees this).
 - "Emergency findings are valid JSON matching the schema" — **Met**.
-- "Unit test covers both history-scan and emergency paths" — **Not met** (no tests in this commit; deferred to Phase 4 Task 8-9, which is acceptable per the plan).
-- History scan correctness for bare JSON — **Not met** (regex bug).
-
-**Doer:** fixed in commit — replaced broken `[^{}]*` bare-JSON regex with `_brace_balanced_extract()`, a brace-depth tracker that correctly collects nested JSON objects containing `"findings"`. Also removed the redundant `'"cr-"' in block` literal check; the `re.search(r'"cr-\w+"')` on the same line already handles finding IDs correctly.
+- "Unit test covers both history-scan and emergency paths" — **Deferred** to Phase 4 Tasks 8-9 (acceptable per plan).
+- History scan correctness for bare JSON — **Met** (after `_brace_balanced_extract` fix).
 
 ---
 
@@ -91,11 +77,12 @@ The code-fence path works correctly for the most common case (agent outputs find
 - The implementation is clean and well-structured. Changes are minimal and focused.
 - Console logging (`[DEADLINE INJECTION]`, `[Fallback]`, `[Emergency]`) provides good operator visibility.
 - The `_scan_history_for_findings` function is properly extracted as a standalone helper, making it testable.
+- `_brace_balanced_extract` is a clean, single-purpose utility with a clear docstring.
 
 ### Consistency between API paths
 - Deadline injection: identical logic in both paths. **Consistent.**
 - Turn counter: identical logic in both paths. **Consistent.**
-- Fallback extraction: Chat Completions extracts assistant texts from the `messages` list (line 230-234), while Responses uses `all_assistant_texts` accumulated during the loop (line 267, 317). Both approaches correctly collect assistant message content. **Consistent in behavior, different in mechanism** (appropriate given the different API structures).
+- Fallback extraction: Chat Completions extracts assistant texts from the `messages` list, while Responses uses `all_assistant_texts` accumulated during the loop. Both approaches correctly collect assistant message content. **Consistent in behavior, different in mechanism** (appropriate given the different API structures).
 
 ### Edge cases
 - `max_turns <= 3`: Deadline may fire too early or not at all (see Task 1 note). Low risk.
@@ -103,21 +90,19 @@ The code-fence path works correctly for the most common case (agent outputs find
 - Empty conversation (agent errors on turn 1): `raw_final_message` is empty, history scan finds nothing, emergency findings are synthesized. Correct.
 - `review_job.py` warning (line 91-96): Since the runner now always populates `findings_data`, this condition should never trigger. It's effectively dead code but acts as a safety net if the runner behavior changes. Acceptable.
 
-### `import warnings` placement
-Line 92 in `review_job.py` has `import warnings` inside the `if` block. This is a minor style inconsistency (stdlib imports are typically at the top of the file) but has no functional impact.
+### Minor style notes (non-blocking)
+- `import warnings` inside the `if` block in `review_job.py` — stdlib imports are typically at the top of the file.
 
 ---
 
 ## Summary
 
-**Tasks 1 and 2 pass.** Deadline injection and turn-count reporting are correctly implemented in both API paths, matching the plan's specifications.
+**All three tasks pass.** Phase 1 — Harness Safety Net is approved for merge.
 
-**Task 3 needs one fix:** The bare-JSON regex in `_scan_history_for_findings` (line 423) uses `[^{}]` which prevents it from matching any nested JSON. This should be fixed to handle nested braces. The fix is small (one regex change) and does not affect the overall safety guarantee since emergency findings always fire as a last resort.
-
-### What must change before merge:
-1. Fix the bare-JSON regex in `_scan_history_for_findings` to handle nested objects (e.g., use `.*` with DOTALL instead of `[^{}]*`, or use a brace-balanced parser).
+- **Task 1 (Deadline Injection):** Correctly injects deadline message at turn N-3 in both API paths.
+- **Task 2 (Turn-Count Reporting):** Correctly appends turn counter to every tool result in both API paths.
+- **Task 3 (Fallback Extraction):** Three-tier fallback (final message -> history scan -> emergency synthesis) works correctly after the `_brace_balanced_extract` fix. Pipeline never crashes on missing findings.
 
 ### What is deferred:
 - Unit tests for all three tasks (planned for Phase 4, Tasks 8-9).
 - Move `import warnings` to top of `review_job.py` (minor style — optional).
-- Remove redundant `'"cr-"' in block` check in line 420 (cosmetic — optional).
