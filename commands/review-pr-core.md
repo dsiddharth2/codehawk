@@ -98,9 +98,11 @@ gh api repos/$REPO/pulls/$PR_ID/comments
 
 ---
 
-## Step 2b -- Analyze Change Impact (if graph tools available)
+## Step 2b — Analyze Change Impact (MANDATORY when graph tools available)
 
-If the `get_change_analysis` tool is available, call it now with the list of changed file paths from Step 2:
+This step is REQUIRED for all PRs where graph tools are available.
+
+Call `get_change_analysis` with the changed file paths listed in the PR Data section above:
 
 get_change_analysis(changed_files=["path/to/file1.py", "path/to/file2.py"])
 
@@ -109,10 +111,9 @@ This returns:
 - `review_priorities` -- ranked list of functions to focus on
 - `test_gaps` -- functions that changed but have no test coverage
 
-Use this to plan your review:
-- For T1-T2 PRs: skip this step (full review is cheap enough)
-- For T3+ PRs: focus your review budget on high-risk files and functions first
-- Use `test_gaps` to flag missing test coverage in findings
+From the response, create a ranked review plan: review files with `risk_score > 0.5` first, then files with `test_gaps`, then remaining files in priority order.
+
+Use `test_gaps` to flag missing test coverage in findings.
 
 If the tool returns an error or is unavailable, continue to Step 3 normally.
 
@@ -164,6 +165,17 @@ For T4/T5, prioritize files in this order:
 ## Step 5 — Review Each Changed File
 
 > **Re-push note:** If this is a re-push (Step 6a detects existing cr-id threads), run Step 6a NOW to collect prior cr-ids and the delta diff (Step 6b), then return here. Review only the lines in `git diff <PRIOR_HEAD_SHA>..<CURRENT_HEAD_SHA>` — do not re-flag existing code that was already reviewed.
+
+**Tier-based review depth — apply your tier from Step 4:**
+
+| Tier | Files | Strategy |
+|------|-------|----------|
+| T1-T2 | 1–10 files | Read each file fully. Graph analysis optional. |
+| T3 | 11–25 files | Use graph priorities. Read top 15 files, skim remaining via diffs. |
+| T4 | 26–50 files | Use graph priorities. Read top 10 high-risk files. Diffs for the rest. |
+| T5 | 51+ files | Use graph priorities. Read top 8 files. Use `get_blast_radius` for cascading risks. Diffs only for remaining files. |
+
+**Budget rule:** Finish all file reading by turn {max_turns - 5}. Reserve the remaining turns for findings synthesis and writing output.
 
 For each file within your tier budget:
 
@@ -334,6 +346,8 @@ You do not need to post any comments yourself — only write `fix_verifications[
 ---
 
 ## Step 7 — Write /workspace/.cr/findings.json
+
+**CRITICAL: If you are on turn 35+ (of 40), STOP reading files and produce findings NOW. Partial findings are infinitely better than no findings. Output what you have.**
 
 When your review is complete, write the findings file.
 
