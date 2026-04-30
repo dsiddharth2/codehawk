@@ -24,6 +24,8 @@ load_dotenv(Path(__file__).parent.parent.parent / ".env")
 # Constants
 # ---------------------------------------------------------------------------
 
+MAX_TURNS_INTEGRATION = 15  # cap agent turns in integration tests to control cost
+
 PR_ID = 6571
 REPO = "BluSKYFunctionApps"
 ADO_ORG = "blub0x"

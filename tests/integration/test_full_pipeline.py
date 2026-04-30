@@ -21,6 +21,7 @@ from review_job import ReviewJob, ReviewJobConfig
 
 from .conftest import (
     PR_ID, REPO, REVIEW_PROMPT,
+    MAX_TURNS_INTEGRATION,
     integration, needs_ado,
     setup_ado_env, clone_pr_workspace,
     save_findings_artifact, print_phase2_summary,
@@ -45,7 +46,7 @@ class TestFullPipeline:
             repo=REPO,
             workspace=workspace,
             model=model,
-            max_turns=40,
+            max_turns=MAX_TURNS_INTEGRATION,
             prompt_path=REVIEW_PROMPT,
         )
 
