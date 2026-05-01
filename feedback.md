@@ -1,109 +1,169 @@
-# Agent Prompt Strategy Fix — Phase 4 Review (Final)
+# CodeHawk Documentation -- Code Review
 
 **Reviewer:** codehawk-reviewer
-**Date:** 2026-04-30 06:44 UTC
-**Phase:** Phase 4 — Test Coverage (Final Sprint Review)
-**Verdict:** APPROVED
+**Date:** 2026-05-01 12:00:00+00:00
+**Verdict:** CHANGES NEEDED
 
 > See the recent git history of this file to understand the context of this review.
 
 ---
 
-## Task 8: Turn Budget Unit Tests
+## Phase 1 Scope
 
-**PASS**
+Four tasks completed on branch `docs/comprehensive-documentation` (commits ab52292 through fb48ce3):
 
-`tests/unit/test_turn_budget.py` provides thorough coverage of the harness-level safety features introduced in Phase 1:
-
-- **`TestBuildSystemPrompt`** (4 tests): Validates that `build_system_prompt()` includes the turn budget statement, graph-first strategy when `has_graph=True`, diff-based fallback when `has_graph=False`, and that the turn count parameter is correctly interpolated. Covers both code paths of the graph/no-graph conditional.
-
-- **`TestDeadlineInjectionChatCompletions`** (2 tests): Uses a snapshot side-effect pattern to capture the `messages` list at each API call, verifying the deadline message appears exactly once at turn N-3 and does **not** appear in any earlier turn. The snapshot approach is well-designed — it handles the in-place mutation of the messages list correctly, which is a subtle detail.
-
-- **`TestDeadlineInjectionResponsesAPI`** (1 test): Verifies deadline injection in the Responses API path by inspecting `call_args_list` on the mock client. Uses `codex-mini-latest` model to route to the correct API path.
-
-- **`TestTurnCounter`** (2 tests): Confirms the turn counter suffix (`[Turn X/Y used. Z remaining.]`) appears in tool result messages at turn 1 and turn 2, validating the counter increments correctly.
-
-- **`TestEmergencyFallback`** (1 test): Verifies that when the agent produces no parseable JSON, emergency findings are synthesized with the correct schema keys (`pr_id`, `repo`, `vcs`, `findings`, `error`).
-
-Mock design is appropriate — mocks target the OpenAI client and ToolRegistry at the boundary, not internal implementation details. The `_make_runner` helper is clean and reusable. No flaky patterns (no time-dependent assertions, no network calls).
+| Task | File | Lines | Commits |
+|------|------|-------|---------|
+| Task 1 | README.md (full rewrite) | 463 | ab52292 |
+| Task 2 | docs/README.md (index) | 41 | 74acdcc |
+| Task 3 | docs/features/graph-tools.md | 268 | 915151b |
+| Task 4 | docs/features/agent-runner.md | 309 | bbb9e2e |
 
 ---
 
-## Task 9: Data Flow + Fallback Unit Tests
+## Task 1: README.md -- Full Rewrite
 
-**PASS**
+**PASS** (with one factual gap, see below)
 
-`tests/unit/test_review_job.py` covers both the `_scan_history_for_findings` pure function and the `ReviewJob.create_findings()` integration with the PR data pre-fetch:
+Cross-checked against source files:
 
-- **`TestScanHistoryForFindings`** (8 tests): Exercises the fallback extraction logic thoroughly:
-  - Code-fenced JSON with `findings` key
-  - Bare JSON with `findings` key (relies on `_brace_balanced_extract`)
-  - Graceful `None` return for no-match, empty list, and empty strings
-  - Prefers larger JSON when multiple candidates exist
-  - Scans multiple texts and picks the best match
-  - Handles `cr-` ID patterns in code fences
-  - Ignores invalid JSON gracefully
+- **Environment variable table** matches `src/config.py` defaults: `VCS` default "ado", `MIN_CONFIDENCE_SCORE` 0.7, `MAX_COMMENTS_PER_FILE` 5, `UPDATE_EXISTING_SUMMARY` true, `LOG_LEVEL` "INFO", `LOG_FORMAT` "json", `ENABLE_GRAPH` true, `ENABLE_PR_SCORING` true, `AUTH_MODE` "auto". Docker-level env vars (`OPENAI_MODEL`, `MAX_TURNS`, `DRY_RUN`, `COMMIT_ID`) confirmed in `entrypoint.sh` lines 30-44. PASS.
 
-  This test class is notably well-structured — it tests a pure function with no mocking needed, making the tests fast and deterministic.
+- **Scoring penalty matrix** matches `src/config.py` defaults (lines 115-137): Security 5.0/4.0/2.0, Performance 3.0/2.0/1.0, Best Practices 2.0/1.0/0.5, Code Style 0.0/0.0/0.0, Documentation 0.0/0.0/0.0. PASS.
 
-- **`TestChangedFilesPropagation`** (3 tests): Validates the critical data flow fix (Bug 1 from requirements):
-  - `changed_files` is correctly extracted from `FetchPRDetailsActivity` and passed to `OpenAIAgentRunner.__init__`
-  - When the pre-fetch fails (e.g., `ConnectionError`), `create_findings()` degrades gracefully with `changed_files=[]`
-  - When files are available, the prompt contains the "Pre-fetched PR Data" section with file paths and `get_change_analysis` instruction
+- **Star rating thresholds** match `src/config.py` lines 140-144: 0.0, 5.0, 15.0, 30.0, 50.0. PASS.
 
-  The `_inject_activity_module` helper is a pragmatic solution for mocking the ADO SDK dependency without requiring it to be installed.
+- **Findings schema** matches `commands/findings-schema.json` and actual agent output structure. JSON example is valid and realistic. PASS.
 
-- **`TestEmergencyFindingsSchema`** (4 tests): Verifies the emergency findings structure has all required keys, empty findings list, and error field. One test (`test_create_findings_writes_valid_json`) goes end-to-end through `create_findings()` and validates the written `findings.json` file.
+- **Project structure tree** verified against actual filesystem -- all listed files and directories exist (`src/run_agent.py`, `src/review_job.py`, `src/post_findings.py`, `src/pr_scorer.py`, `src/graph_builder.py`, `src/config.py`, `src/score_comparison.py`, `src/agents/openai_runner.py`, `src/tools/registry.py`, `src/tools/graph_tools.py`, `src/tools/vcs_tools.py`, `src/tools/workspace_tools.py`, `src/activities/`, `src/models/`, `commands/review-pr-core.md`, `commands/findings-schema.json`, `docs/`, `ci/`, `templates/`, `entrypoint.sh`, `Dockerfile`, `pyproject.toml`). PASS.
 
----
+- **Developer controls** (`# cr: intentional`, `# cr: ignore-next-line`, `# cr: ignore-block start/end`) confirmed in `commands/review-pr-core.md`. PASS.
 
-## Task 10: Integration Test Cost Control
+- **Pipeline caps** ("30 total, 5 per file", confidence 0.7) confirmed in `src/post_findings.py` lines 31-33: `MAX_TOTAL_FINDINGS = 30`, `MAX_PER_FILE = 5`, `MIN_CONFIDENCE = 0.7`. PASS.
 
-**PASS**
+- **Quick Start CLI example** matches `src/run_agent.py` argparse definitions. PASS.
 
-`tests/integration/conftest.py` defines `MAX_TURNS_INTEGRATION = 15` as a module-level constant. `test_full_pipeline.py` imports and uses it in the `ReviewJobConfig` constructor (`max_turns=MAX_TURNS_INTEGRATION`), replacing the previous hardcoded 40-turn budget. This reduces integration test cost by ~62% while still providing enough turns for meaningful agent behavior.
+- **3 Mermaid diagrams** (flowchart LR architecture, flowchart TD scoring, sequenceDiagram pipeline flow) -- all syntactically correct with proper code fences. PASS.
 
-The constant is properly exported in the `conftest.py` imports at the top of `test_full_pipeline.py`, making it easy to find and adjust if needed.
+- **9 documentation links** at bottom of README all resolve to existing files in `docs/`. PASS.
+
+**FAIL -- Cost table missing `gpt-4.1-nano` model.** The README lists 12 models in the Cost Tracking table. The source `src/post_findings.py` `MODEL_COST_TABLE` (line 39) has 13 entries -- the README omits `gpt-4.1-nano` ($0.10 input / $0.40 output per 1M tokens). All other 12 entries have correct prices. This is a verifiable factual gap against the source.
 
 ---
 
-## Sprint Completeness
+## Task 2: docs/README.md -- Documentation Index
 
-All 10 tasks across 4 phases are implemented and committed:
+**PASS**
 
-| Phase | Task | Status | Commit |
-|-------|------|--------|--------|
-| Phase 1 | Task 1: Deadline injection at turn N-3 | Done | `421b131` |
-| Phase 1 | Task 2: Turn-count reporting in tool results | Done | `421b131` |
-| Phase 1 | Task 3: Fallback extraction + emergency findings | Done | `421b131`, `6c44117` (fix) |
-| Phase 2 | Task 4: Pre-fetch PR data, inject changed_files | Done | `3cf83cf` |
-| Phase 2 | Task 5: build_system_prompt() with graph/no-graph | Done | `a0cdd6d` |
-| Phase 3 | Task 6: Step 2b mandatory, remove T1-T2 skip | Done | `119a437` |
-| Phase 3 | Task 7: Tier-based strategy + deadline warning | Done | `10ca3fd` |
-| Phase 4 | Task 8: Turn budget unit tests | Done | `44daa86`, `07cd5e8` (fix) |
-| Phase 4 | Task 9: changed_files + fallback unit tests | Done | `dbc106a`, `07cd5e8` (fix) |
-| Phase 4 | Task 10: MAX_TURNS_INTEGRATION = 15 | Done | `49cfd66` |
+- **8 feature doc links** all resolve to existing files in `docs/features/` (agent-runner.md, graph-tools.md, review-modes.md, scoring.md, post-findings.md, fix-verification.md, ci-integration.md, vcs-cli.md). PASS.
 
-Key implementation details verified across all phases:
+- **Architecture link** resolves to `docs/architecture.md`. PASS.
 
-- **Deadline injection** fires at `turn == max_turns - 3` in both Chat Completions and Responses API loops (openai_runner.py lines 162-169, 294-301).
-- **Turn counter** appended to every tool result in both loops (lines 238-239, 378-379).
-- **Fallback extraction** scans assistant message history using `_scan_history_for_findings` with brace-balanced JSON extraction (lines 250-257, 390-392).
-- **Emergency findings** synthesized as last resort with proper schema and error field (lines 258-268, 393-403).
-- **changed_files** propagated from `FetchPRDetailsActivity` through `ReviewJob.create_findings()` to `OpenAIAgentRunner.__init__` (review_job.py lines 67-99).
-- **RuntimeError removed** — replaced with `warnings.warn()` (review_job.py lines 104-109).
-- **build_system_prompt()** dynamically generates system prompt based on `max_turns` and `has_graph` (openai_runner.py lines 27-71).
-- **Review prompt** Step 2b is mandatory with graph-first instructions (review-pr-core.md lines 101-118), Step 5 has tier-based strategy table (lines 169-178), Step 7 has deadline warning (line 350).
+- **Quick Links** all resolve: `../commands/findings-schema.json`, `../commands/review-pr-core.md`, `features/scoring.md`, `features/ci-integration.md`, `../ci/`, `../templates/`. PASS.
+
+- **Descriptions** are accurate summaries of each document's content. PASS.
+
+- No content duplication -- this file serves purely as an index/navigation hub. PASS.
+
+---
+
+## Task 3: docs/features/graph-tools.md -- Graph Analysis Deep-Dive
+
+**PASS**
+
+Cross-checked all 4 tool implementations against `src/tools/graph_tools.py`:
+
+- **`get_change_analysis`** (lines 173-227): Input schema `changed_files` array matches. Risk score formula documented as `min(1.0, non_test_impacted / 20.0)` -- confirmed at source line 184. Review priorities filter to Function/Method/Class -- matches line 189. Test gaps check uses `get_transitive_tests` -- matches lines 193-197. JSON output structure matches handler return. PASS.
+
+- **`get_blast_radius`** (lines 23-67): Input schema matches. Output includes `impacted_files`, `impacted_functions`, `test_gaps` -- matches handler. Implementation calls `get_impact_radius`, filters `impacted_nodes` to Function/Method -- confirmed at lines 27-31. PASS.
+
+- **`get_callers`** (lines 71-121): Input schema matches (function_name required, file_path optional). Qualified name construction `file_path::function_name` documented and confirmed at source line 79. Dual lookup (edges_by_target + search_edges_by_target_name) documented and confirmed. Dedup by `source_qualified` confirmed at line 82. PASS.
+
+- **`get_dependents`** (lines 125-169): Input schema matches. Strips leading `/` -- confirmed at source line 128. Filters to `IMPORTS_FROM` edges -- confirmed at line 130. Fallback to `search_edges_by_target_name` -- confirmed at lines 132-133. Groups by source file -- confirmed. PASS.
+
+- **Graph Builder section** matches `src/graph_builder.py`: package name `code-review-graph`, entry point `build_or_update_graph(full_rebuild=True, repo_root=workspace, postprocess="minimal")`, SQLite storage via `get_db_path`, 30s timeout via `ThreadPoolExecutor`, all 6 failure modes documented match the actual exception handling. PASS.
+
+- **Mermaid flowchart** (graph-first strategy) syntactically correct. PASS.
+
+- **Tier-based depth table** consistent with `commands/review-pr-core.md` tier definitions. PASS.
+
+- **Graceful degradation section** accurately describes no-graph system prompt fallback and per-tool error handling via `{"error": "..."}`. PASS.
+
+---
+
+## Task 4: docs/features/agent-runner.md -- Agent Runner Deep-Dive
+
+**PASS**
+
+Cross-checked against `src/agents/openai_runner.py` and `src/tools/registry.py`:
+
+- **API detection**: `RESPONSES_API_MODELS = {"gpt-5-codex", "codex-mini-latest"}` -- exact match to source line 90. Property `_use_responses_api` matches line 131-132. PASS.
+
+- **ToolRegistry class diagram** (Mermaid classDiagram): `Tool` dataclass fields (name, schema, handler) match `registry.py` line 13. `ToolRegistry` methods (_tools dict, register, get, openai_definitions, responses_definitions, dispatch) all match source. PASS.
+
+- **Tool registration order** matches `__init__` in source lines 118-128: vcs_tools, workspace_tools, then conditional graph_tools. PASS.
+
+- **API definition formats**: `openai_definitions()` shape `[{"type": "function", "function": {...}}]` matches source line 33-36. `responses_definitions()` shape `[{"type": "function", "name": ..., ...}]` matches source lines 40-48. PASS.
+
+- **System prompt** (`build_system_prompt`): Role statement, turn budget, graph/no-graph strategy blocks, tool mapping table -- all confirmed in source lines 27-71. PASS.
+
+- **Conversation loop flowchart** (Mermaid flowchart TD): Accurately depicts the turn loop, finish_reason branching, tool dispatch, turn counter suffix, deadline injection at N-3, and break conditions. PASS.
+
+- **Turn budget 3 layers**: Layer 1 (continuous counter) at source lines 238-239/378-379. Layer 2 (deadline injection at N-3) at source lines 162-169/294-301. Layer 3 (30k truncation) at source lines 235-236/375-376. PASS.
+
+- **Findings extraction cascade** (Mermaid flowchart TD): Tier 1 (`_extract_findings_json`) 4-step process matches source lines 487-511: code fence regex, `pr_id` regex, full-text parse, strict=False retry. Tier 2 (`_scan_history_for_findings`) matches source lines 461-484: code fence + brace-balanced extraction, reversed iteration, largest-wins selection. Tier 3 (emergency synthesis) dict matches source lines 260-268 exactly. PASS.
+
+- **AgentResult fields**: All 10 fields documented match the class definition at source lines 74-87 (findings_data, input_tokens, output_tokens, total_tokens, tool_calls_count, duration_seconds, model, turns, raw_final_message, returncode). PASS.
+
+- **ReviewJob usage example**: Code snippet matches `review_job.py` `create_findings()` flow at source lines 65-114. PASS.
+
+---
+
+## Mermaid Diagram Verification (7 diagrams total)
+
+All diagrams use correct syntax: proper ` ```mermaid ` code fences, valid diagram type keywords, proper node/edge syntax.
+
+| File | Diagram | Type | Status |
+|------|---------|------|--------|
+| README.md | Architecture overview | flowchart LR | PASS |
+| README.md | Scoring flow | flowchart TD | PASS |
+| README.md | Pipeline sequence | sequenceDiagram | PASS |
+| graph-tools.md | Graph-first strategy | flowchart TD | PASS |
+| agent-runner.md | Tool system | classDiagram | PASS |
+| agent-runner.md | Conversation loop | flowchart TD | PASS |
+| agent-runner.md | Findings extraction | flowchart TD | PASS |
+
+---
+
+## Internal Link Verification
+
+All internal links across all 4 files resolve:
+
+| Source File | Link Target | Exists |
+|-------------|-------------|--------|
+| README.md | docs/architecture.md | Yes |
+| README.md | docs/features/agent-runner.md | Yes |
+| README.md | docs/features/graph-tools.md | Yes |
+| README.md | docs/features/review-modes.md | Yes |
+| README.md | docs/features/scoring.md | Yes |
+| README.md | docs/features/post-findings.md | Yes |
+| README.md | docs/features/fix-verification.md | Yes |
+| README.md | docs/features/ci-integration.md | Yes |
+| README.md | docs/features/vcs-cli.md | Yes |
+| docs/README.md | architecture.md | Yes |
+| docs/README.md | features/*.md (8 links) | Yes |
+| docs/README.md | ../commands/findings-schema.json | Yes |
+| docs/README.md | ../commands/review-pr-core.md | Yes |
+| docs/README.md | ../ci/ | Yes |
+| docs/README.md | ../templates/ | Yes |
 
 ---
 
 ## Summary
 
-**All 10 tasks pass review.** The sprint delivers a comprehensive fix for the agent prompt strategy failure on PR #6435:
+**3 of 4 tasks fully pass.** Task 1 (README.md) has one factual gap: the Cost Tracking table is missing the `gpt-4.1-nano` model ($0.10 input / $0.40 output per 1M tokens) which is present in `src/post_findings.py` `MODEL_COST_TABLE`. All other factual claims, diagrams, links, and cross-references are verified correct.
 
-1. **Harness safety net** (Phase 1): Deadline injection, turn counter, and fallback extraction ensure the pipeline never crashes regardless of agent behavior.
-2. **Data flow** (Phase 2): Pre-fetched PR data eliminates the bootstrapping problem; dynamic system prompt mandates graph-first strategy.
-3. **Review prompt** (Phase 3): Mandatory Step 2b, tier-based review depth, and deadline warnings guide the agent toward efficient behavior.
-4. **Test coverage** (Phase 4): 25+ unit tests covering all key scenarios with clean mock design and no flaky patterns.
+**Required fix:**
+- Add `gpt-4.1-nano` row to the Cost Tracking table in README.md (between `gpt-4.1` and `gpt-4o`)
 
-No changes needed. Sprint is complete and ready for integration testing against a live PR.
+No other issues found. Documentation depth is excellent -- both deep-dive docs (graph-tools.md and agent-runner.md) go well beyond surface-level descriptions, documenting implementation internals, field-level semantics, and failure modes with source-verified accuracy.
