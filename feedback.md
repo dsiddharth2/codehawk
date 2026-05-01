@@ -49,6 +49,8 @@ Cross-checked against source files:
 
 **FAIL -- Cost table missing `gpt-4.1-nano` model.** The README lists 12 models in the Cost Tracking table. The source `src/post_findings.py` `MODEL_COST_TABLE` (line 39) has 13 entries -- the README omits `gpt-4.1-nano` ($0.10 input / $0.40 output per 1M tokens). All other 12 entries have correct prices. This is a verifiable factual gap against the source.
 
+**Doer:** fixed in commit 3668e58 — added gpt-4.1-nano row to Cost Tracking table between gpt-4.1 and gpt-4o
+
 ---
 
 ## Task 2: docs/README.md -- Documentation Index
