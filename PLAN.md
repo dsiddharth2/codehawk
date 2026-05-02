@@ -47,24 +47,32 @@
 - **Blockers:** Task 3 (smart_diff.py must exist)
 
 #### Task 5: Integrate filtering + batch fields into review_job.py
-- **Change:** (1) In `create_findings()`, after PR pre-fetch (line 79), insert filtering: import `parse_skip_extensions`/`filter_changed_files`, apply to `changed_files`, log filtered/kept counts. Use `self.settings.skip_extensions`. (2) Remove `MAX_FILES = 100` cap in `_build_changed_files_section()` (line 212) — show ALL code files. Add a summary line for skipped non-code files count. (3) Add optional fields to `ReviewJobConfig` dataclass: `batch_index: Optional[int] = None`, `batch_total: Optional[int] = None`, `file_subset: Optional[list] = None`, `pre_built_graph = None`, `skipped_files: Optional[list] = None`. (4) When `file_subset` is set in `create_findings()`, skip PR pre-fetch and use subset directly as `changed_files`. When `pre_built_graph` is set, skip `build_graph()` and use it. When `batch_index` is set, append batch context to prompt ("Batch N/M — reviewing N files of M total code files").
+- **Change:** (1) In `create_findings()`, after PR pre-fetch (line 79), insert filtering: import `parse_skip_extensions`/`filter_changed_files`, apply to `changed_files`, log filtered/kept counts. Use `self.settings.skip_extensions`. Store the skipped count locally for the summary line — no need to thread it through config. (2) Remove `MAX_FILES = 100` cap in `_build_changed_files_section()` (line 212) — show ALL code files. Add a summary line for skipped non-code files count (passed as a parameter from `create_findings()`). (3) Add optional fields to `ReviewJobConfig` dataclass: `batch_index: Optional[int] = None`, `batch_total: Optional[int] = None`, `file_subset: Optional[list] = None`, `pre_built_graph = None`. (4) When `file_subset` is set in `create_findings()`, skip PR pre-fetch and use subset directly as `changed_files`. When `pre_built_graph` is set, skip `build_graph()` and use it. When `batch_index` is set, append batch context to prompt ("Batch N/M — reviewing N files of M total code files").
 - **Files:** `src/review_job.py`
 - **Tier:** standard
-- **Done when:** `ReviewJobConfig` accepts new optional fields; `create_findings()` filters non-code files when no `file_subset` provided; `_build_changed_files_section()` shows all files (no 100-file cap); batch mode fields are respected (file_subset bypasses pre-fetch, pre_built_graph bypasses graph build, batch_index adds context to prompt); existing tests pass.
+- **Done when:** `ReviewJobConfig` accepts 4 new optional fields (batch_index, batch_total, file_subset, pre_built_graph); `create_findings()` filters non-code files when no `file_subset` provided; `_build_changed_files_section()` shows all files (no 100-file cap) with skipped count summary; batch mode fields are respected (file_subset bypasses pre-fetch, pre_built_graph bypasses graph build, batch_index adds context to prompt); existing tests pass.
 - **Blockers:** Task 2 (file_filter.py must exist)
 
-#### Task 6: Update system prompt, raise truncation limits
-- **Change:** (1) In `src/agents/openai_runner.py`, modify `build_system_prompt()`: remove "review top 10-15 files" from both graph branch (line 45) and no-graph branch (line 51). Add new instructions: "Review ALL files in your assigned batch — do not skip files. The orchestrator has already filtered non-code files and split the PR into manageable batches." and "When get_file_diff returns is_summary=true, the diff was too large to return in full. Read the hunk summary to identify high-risk sections, then call get_file_diff again with start_line and end_line to drill into those sections." (2) Raise tool result cap from 30000 to 50000 at lines 256 and 395. (3) In `src/tools/workspace_tools.py`: raise search_code output truncation from 15000 to 25000 (line 104); raise read_local_file default max_lines from 500 to 1000 (line 148). (4) In `src/graph_builder.py`: add a new tier `(100, 600)` to `_TIMEOUT_TIERS` for 51-100 file PRs, keeping 300s for <=50 files.
+#### Task 6a: Update system prompt for batched review
+- **Change:** In `src/agents/openai_runner.py`, modify `build_system_prompt()`: remove "review top 10-15 files" from both graph branch (line 45) and no-graph branch (line 51). Add new instructions: "Review ALL files in your assigned batch — do not skip files. The orchestrator has already filtered non-code files and split the PR into manageable batches." and "When get_file_diff returns is_summary=true, the diff was too large to return in full. Read the hunk summary to identify high-risk sections, then call get_file_diff again with start_line and end_line to drill into those sections."
+- **Files:** `src/agents/openai_runner.py`
+- **Tier:** cheap
+- **Done when:** System prompt no longer mentions "top 10-15 files"; includes "Review ALL files" and smart diff drill-in instructions; existing tests pass.
+- **Blockers:** None
+
+#### Task 6b: Raise truncation and timeout limits
+- **Change:** (1) In `src/agents/openai_runner.py`: raise tool result cap from 30000 to 50000 at lines 256 and 395. (2) In `src/tools/workspace_tools.py`: raise search_code output truncation from 15000 to 25000 (line 104); raise read_local_file default max_lines from 500 to 1000 (line 148). (3) In `src/graph_builder.py`: add a new tier `(100, 600)` to `_TIMEOUT_TIERS` for 51-100 file PRs, keeping 300s for <=50 files.
 - **Files:** `src/agents/openai_runner.py`, `src/tools/workspace_tools.py`, `src/graph_builder.py`
 - **Tier:** cheap
-- **Done when:** System prompt no longer mentions "top 10-15 files"; includes "Review ALL files" and smart diff instructions; tool result cap is 50KB in both API paths; search_code cap is 25KB; read_local_file default is 1000 lines; graph timeout for 51-100 files is 600s; existing tests pass.
+- **Done when:** Tool result cap is 50KB in both API paths; search_code cap is 25KB; read_local_file default is 1000 lines; graph timeout for 51-100 files is 600s; existing tests pass.
 - **Blockers:** None
 
 #### VERIFY: Phase 2 — Integration
 - Run `pytest tests/` — all existing tests pass
 - Verify `get_file_diff` tool schema has `start_line`/`end_line`
-- Verify system prompt changes via inspecting `build_system_prompt()` output
-- Verify `ReviewJobConfig` accepts batch fields
+- Verify system prompt changes via inspecting `build_system_prompt()` output (Task 6a)
+- Verify raised limits: tool result 50KB, search 25KB, read 1000 lines, graph 600s (Task 6b)
+- Verify `ReviewJobConfig` accepts 4 batch fields
 - Report: tests passing, any regressions, any issues found
 
 ---
@@ -74,7 +82,7 @@
 #### Task 7: Create BatchReviewJob orchestrator
 - **Change:** Create `src/batch_review_job.py` with class `BatchReviewJob`:
   - `__init__` accepts pr_id, repo, workspace, model, prompt_path, vcs, settings.
-  - `run(dry_run, commit_id)` method: (1) Pre-fetch PR data once via `FetchPRDetailsActivity`. (2) Filter non-code files via `file_filter.filter_changed_files`. (3) Build graph once via `graph_builder.build_graph`. (4) If code files <= `settings.batch_size`, delegate to single-session `ReviewJob` (backward compatible shortcut). (5) Split into batches via `_split_into_batches()` using round-robin by churn descending. (6) Run each batch sequentially via `ReviewJob` with `file_subset`, `pre_built_graph`, `batch_index`, `batch_total` set on `ReviewJobConfig`. (7) Merge findings via `_merge_results()`: concatenate all findings, dedup by `(file, line, title)`, re-sequence cr-ids as `cr-001`, `cr-002`, ..., sum usage stats (input_tokens, output_tokens, duration), union review_modes. (8) Write merged `findings.json`. (9) If any batch fails, catch exception, log error, continue with remaining batches.
+  - `run(dry_run, commit_id)` method: (1) Pre-fetch PR data once via `FetchPRDetailsActivity`. (2) Filter non-code files via `file_filter.filter_changed_files`. (3) Build graph once via `graph_builder.build_graph`. (4) If code files <= `settings.batch_size`, delegate to single-session `ReviewJob` (backward compatible shortcut). (5) Split into batches via `_split_into_batches()` using round-robin by churn descending. (6) Run each batch sequentially via `ReviewJob` with `file_subset`, `pre_built_graph`, `batch_index`, `batch_total`, and `max_turns=self.settings.batch_max_turns` set on `ReviewJobConfig` (this explicitly threads the per-batch turn budget from Settings into each batch's config). (7) Merge findings via `_merge_results()`: concatenate all findings, dedup by `(file, line, title)`, re-sequence cr-ids as `cr-001`, `cr-002`, ..., sum usage stats (input_tokens, output_tokens, duration), union review_modes. (8) Write merged `findings.json`. (9) If any batch fails, catch exception, log error, continue with remaining batches.
   - `_split_into_batches(code_files, batch_size)`: sort by `additions + deletions` descending, round-robin distribute.
   - `_merge_results(batch_results)`: dedup, re-sequence, sum usage.
 - **Files:** `src/batch_review_job.py` (new)
@@ -87,7 +95,7 @@
 - **Files:** `src/run_agent.py`, `commands/review-pr-core.md`, `src/post_findings.py`
 - **Tier:** standard
 - **Done when:** `run_agent.py` uses `BatchReviewJob`; prompt no longer says "highest-risk paths only" for T4/T5; prompt includes smart diff drill-in guidance; `post_findings.py` reads caps from settings; existing tests pass.
-- **Blockers:** Task 7 (BatchReviewJob must exist)
+- **Blockers:** Task 1 (Settings fields for `max_total_findings`/`max_per_file_findings`), Task 7 (BatchReviewJob must exist)
 
 #### VERIFY: Phase 3 — Orchestrator
 - Run `pytest tests/` — all existing tests pass
@@ -131,6 +139,9 @@
 | Raising tool result cap to 50KB causes context window overflow | Med — agent runs out of context | Monitor in testing; can lower to 40KB if needed |
 | `run_agent.py` change breaks existing pipeline | High — CI pipeline failures | BatchReviewJob delegates to ReviewJob for small PRs — backward compatible by design |
 | Round-robin splitting puts related files in different batches | Low — cross-file issues missed | Graph is shared — agent still uses `get_callers`/`get_blast_radius` across boundaries |
+| `batch_max_turns` vs `max_turns` confusion — two settings controlling turn budget | Med — per-batch turn budget silently wrong | Task 7 explicitly threads `settings.batch_max_turns` into per-batch `ReviewJobConfig.max_turns`; comment in code explains the relationship |
+| Sequential batch execution on very large PRs (500+ files, ~20 batches) takes too long | Med — review times out in CI | Log per-batch timing; parallel execution is a documented future enhancement |
+| Intra-batch context doesn't span batches — cross-file bugs split across batches may be missed | Med — false negatives on cross-file issues | Shared graph partially mitigates (agent can query `get_callers`/`get_blast_radius` across all files); round-robin distributes related high-churn files across batches to increase coverage overlap |
 
 ## Notes
 - Each task should result in a git commit

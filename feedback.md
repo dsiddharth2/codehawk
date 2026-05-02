@@ -25,6 +25,8 @@
 
 These have no logical cohesion. The system prompt change affects agent behavior; the limit raises are mechanical. The graph timeout is entirely independent. Two developers working on "Task 6" would step on each other. Recommend splitting into: (a) system prompt update in openai_runner.py, and (b) raise truncation/timeout limits across files. Alternatively, keep as-is but rename to "Raise all caps and update system prompt" so the grab-bag nature is explicit and a single developer owns all of it.
 
+**Doer:** fixed — split Task 6 into Task 6a (system prompt update in openai_runner.py) and Task 6b (raise truncation/timeout limits across openai_runner.py, workspace_tools.py, graph_builder.py). Updated progress.json with both new task entries.
+
 ---
 
 ## 3. Key Abstractions in Earliest Tasks
@@ -76,13 +78,19 @@ No task references a module that hasn't been created in a prior phase.
 
 **(a) `batch_max_turns` threading is unspecified.** Task 1 adds `batch_max_turns` (default 40) to Settings. Task 7 creates `BatchReviewJob` which constructs `ReviewJobConfig` per batch. But neither Task 5 nor Task 7 specifies that `ReviewJobConfig.max_turns` should be set to `settings.batch_max_turns` for per-batch jobs. Currently `ReviewJobConfig.max_turns` defaults to 40 (which happens to match), but the connection is implicit. One developer might thread it, another might leave the default. The plan should explicitly state in Task 7's change description: "Set `max_turns=self.settings.batch_max_turns` on per-batch ReviewJobConfig."
 
+**Doer:** fixed — Task 7's `run()` step (6) now explicitly states: "and `max_turns=self.settings.batch_max_turns` set on `ReviewJobConfig` (this explicitly threads the per-batch turn budget from Settings into each batch's config)."
+
 **(b) `skipped_files` on ReviewJobConfig is dangling.** Task 5 adds `skipped_files: Optional[list] = None` to `ReviewJobConfig`, but no task ever sets this field. Task 5 says `_build_changed_files_section()` should "add a summary line for skipped non-code files count" — but the skipped files come from `filter_changed_files()` in `create_findings()`, not from the config. Either remove `skipped_files` from ReviewJobConfig (the count is already available in `create_findings()` scope), or specify in Task 7 that `BatchReviewJob` passes `skipped_files` through the config so batch-mode jobs can display the count without re-filtering. Currently ambiguous.
+
+**Doer:** fixed — removed `skipped_files` from ReviewJobConfig. Task 5 now specifies that the skipped count is stored locally in `create_findings()` scope and passed as a parameter to `_build_changed_files_section()`. ReviewJobConfig has 4 optional fields (batch_index, batch_total, file_subset, pre_built_graph).
 
 ---
 
 ## 10. Hidden Dependencies Between Tasks
 
 **NOTE — one implicit dependency.** Task 8 modifies `post_findings.py` to read `get_settings().max_total_findings` instead of the hardcoded constant. This requires `get_settings()` to return a Settings instance with the `max_total_findings` field — which is added in Task 1. Task 8's blockers list only Task 7, but it also implicitly depends on Task 1. Since Task 1 is in Phase 1 and Task 8 is in Phase 3, the ordering is naturally satisfied, but the dependency should be documented for completeness.
+
+**Doer:** fixed — Task 8 blockers now reads: "Task 1 (Settings fields for `max_total_findings`/`max_per_file_findings`), Task 7 (BatchReviewJob must exist)."
 
 ---
 
@@ -95,6 +103,8 @@ No task references a module that hasn't been created in a prior phase.
 | `batch_max_turns` vs `max_turns` confusion — two settings controlling the same thing | Med — per-batch turn budget silently wrong | Explicitly thread `batch_max_turns` into per-batch config; add comment explaining the relationship |
 | Sequential batch execution on very large PRs (500+ files, ~20 batches) takes too long | Med — review times out in CI | Log per-batch timing; note in plan that parallel execution is a future enhancement (already mentioned in requirements edge cases) |
 | Related files split across batches miss cross-file bugs | Med — false negatives | Already partially mitigated by shared graph, but worth noting that intra-batch context doesn't span batches |
+
+**Doer:** fixed — all three risks added to the risk register in PLAN.md: (1) `batch_max_turns` vs `max_turns` confusion, (2) sequential execution timeout on very large PRs, (3) intra-batch context gap for cross-file bugs.
 
 ---
 
@@ -137,10 +147,10 @@ All line numbers and values match. The plan accurately describes the current cod
 **Verdict: CHANGES NEEDED** — The plan is architecturally sound, well-phased, and aligned with requirements. Two issues must be fixed before implementation begins:
 
 **Must fix:**
-1. **`batch_max_turns` threading** — Task 7 must explicitly specify that per-batch `ReviewJobConfig.max_turns` is set to `self.settings.batch_max_turns`. Without this, the connection between the config field (Task 1) and its usage (Task 7) is implicit and error-prone.
-2. **`skipped_files` on ReviewJobConfig** — Either remove this dangling field from Task 5 (the count is already available in `create_findings()` scope without config plumbing), or specify which task sets it and how batch-mode jobs use it. Currently no task ever populates it.
+1. **`batch_max_turns` threading** — Task 7 must explicitly specify that per-batch `ReviewJobConfig.max_turns` is set to `self.settings.batch_max_turns`. Without this, the connection between the config field (Task 1) and its usage (Task 7) is implicit and error-prone. **Doer:** fixed — see §9(a) annotation above.
+2. **`skipped_files` on ReviewJobConfig** — Either remove this dangling field from Task 5 (the count is already available in `create_findings()` scope without config plumbing), or specify which task sets it and how batch-mode jobs use it. Currently no task ever populates it. **Doer:** fixed — see §9(b) annotation above.
 
 **Should fix:**
-3. **Task 6 cohesion** — Consider splitting or explicitly acknowledging the grab-bag nature. Not blocking, but increases session risk for the implementer.
-4. **Risk register additions** — Add the three missing risks identified above (batch_max_turns confusion, sequential execution time, cross-batch context gap).
-5. **Task 8 hidden dependency on Task 1** — Add Task 1 to Task 8's blockers list for documentation completeness.
+3. **Task 6 cohesion** — Consider splitting or explicitly acknowledging the grab-bag nature. Not blocking, but increases session risk for the implementer. **Doer:** fixed — see §2 annotation above.
+4. **Risk register additions** — Add the three missing risks identified above (batch_max_turns confusion, sequential execution time, cross-batch context gap). **Doer:** fixed — see §11 annotation above.
+5. **Task 8 hidden dependency on Task 1** — Add Task 1 to Task 8's blockers list for documentation completeness. **Doer:** fixed — see §10 annotation above.

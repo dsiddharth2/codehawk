@@ -49,9 +49,17 @@
       "commit": null
     },
     {
-      "id": 6,
+      "id": "6a",
       "phase": 2,
-      "title": "Update system prompt, raise truncation limits",
+      "title": "Update system prompt for batched review",
+      "tier": "cheap",
+      "status": "pending",
+      "commit": null
+    },
+    {
+      "id": "6b",
+      "phase": 2,
+      "title": "Raise truncation and timeout limits",
       "tier": "cheap",
       "status": "pending",
       "commit": null
