@@ -1,40 +1,116 @@
 {
-  "project": "CodeHawk Comprehensive Documentation",
-  "branch": "docs/comprehensive-documentation",
-  "base_branch": "main",
-  "phases": [
+  "tasks": [
     {
-      "name": "Phase 1: Core Documentation",
-      "tasks": [
-        {
-          "id": "task-1",
-          "title": "README.md — Full Rewrite with Mermaid Diagrams",
-          "status": "completed",
-          "notes": "463 lines, 3 Mermaid diagrams (architecture flowchart, scoring flowchart, pipeline sequence diagram). All 9 docs/ links verified. Committed ab52292."
-        },
-        {
-          "id": "task-2",
-          "title": "docs/README.md — Documentation Index",
-          "status": "completed",
-          "notes": "41 lines. Links to all 8 feature docs and quick-link table. Committed 74acdcc."
-        },
-        {
-          "id": "task-3",
-          "title": "docs/features/graph-tools.md — Graph Analysis (Deep)",
-          "status": "completed",
-          "notes": "268 lines. All 4 tools documented with JSON input/output examples, field tables, implementation details, Mermaid graph-first strategy flowchart, tier table, graceful degradation table. Committed 915151b."
-        },
-        {
-          "id": "task-4",
-          "title": "docs/features/agent-runner.md — Agent Runner (Deep)",
-          "status": "completed",
-          "notes": "309 lines. 3 Mermaid diagrams (class diagram, conversation loop, findings extraction cascade). API detection table, ToolRegistry internals, system prompt content, turn budget layers, AgentResult table, ReviewJob usage example. Committed bbb9e2e."
-        }
-      ],
-      "verify": {
-        "status": "completed",
-        "notes": "All 4 files exist and non-empty (463 + 41 + 268 + 309 lines). README.md has 3 Mermaid diagrams. agent-runner.md has 3 Mermaid diagrams. graph-tools.md has 1 Mermaid diagram. All 8 feature docs exist in docs/features/. architecture.md exists. All docs/ links in README.md resolve. No content duplicated from existing docs — all graph-tools and agent-runner content is new deep documentation."
-      }
+      "id": 1,
+      "phase": 1,
+      "title": "Add config fields to Settings",
+      "tier": "cheap",
+      "status": "pending",
+      "commit": null
+    },
+    {
+      "id": 2,
+      "phase": 1,
+      "title": "Create file_filter module",
+      "tier": "cheap",
+      "status": "pending",
+      "commit": null
+    },
+    {
+      "id": 3,
+      "phase": 1,
+      "title": "Create smart_diff module",
+      "tier": "standard",
+      "status": "pending",
+      "commit": null
+    },
+    {
+      "id": "v1",
+      "phase": 1,
+      "title": "VERIFY: Phase 1 — Foundation Modules",
+      "tier": "verify",
+      "status": "pending",
+      "commit": null
+    },
+    {
+      "id": 4,
+      "phase": 2,
+      "title": "Integrate smart diff into vcs_tools.py",
+      "tier": "standard",
+      "status": "pending",
+      "commit": null
+    },
+    {
+      "id": 5,
+      "phase": 2,
+      "title": "Integrate filtering + batch fields into review_job.py",
+      "tier": "standard",
+      "status": "pending",
+      "commit": null
+    },
+    {
+      "id": 6,
+      "phase": 2,
+      "title": "Update system prompt, raise truncation limits",
+      "tier": "cheap",
+      "status": "pending",
+      "commit": null
+    },
+    {
+      "id": "v2",
+      "phase": 2,
+      "title": "VERIFY: Phase 2 — Integration",
+      "tier": "verify",
+      "status": "pending",
+      "commit": null
+    },
+    {
+      "id": 7,
+      "phase": 3,
+      "title": "Create BatchReviewJob orchestrator",
+      "tier": "premium",
+      "status": "pending",
+      "commit": null
+    },
+    {
+      "id": 8,
+      "phase": 3,
+      "title": "Update run_agent.py, review prompt, and post_findings caps",
+      "tier": "standard",
+      "status": "pending",
+      "commit": null
+    },
+    {
+      "id": "v3",
+      "phase": 3,
+      "title": "VERIFY: Phase 3 — Orchestrator",
+      "tier": "verify",
+      "status": "pending",
+      "commit": null
+    },
+    {
+      "id": 9,
+      "phase": 4,
+      "title": "Unit tests for file_filter and smart_diff",
+      "tier": "standard",
+      "status": "pending",
+      "commit": null
+    },
+    {
+      "id": 10,
+      "phase": 4,
+      "title": "Unit tests for BatchReviewJob merge logic",
+      "tier": "standard",
+      "status": "pending",
+      "commit": null
+    },
+    {
+      "id": "v4",
+      "phase": 4,
+      "title": "VERIFY: Phase 4 — Tests",
+      "tier": "verify",
+      "status": "pending",
+      "commit": null
     }
   ]
 }
