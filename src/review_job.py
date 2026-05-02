@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -26,6 +27,8 @@ from typing import Any, Dict, Optional
 
 from agents.openai_runner import AgentResult, OpenAIAgentRunner
 from config import Settings, get_settings
+
+logger = logging.getLogger("codehawk.review_job")
 
 
 @dataclass
@@ -66,6 +69,7 @@ class ReviewJob:
         """Run the agent and write findings.json. Returns the path."""
         # Pre-fetch PR data so changed_files can be injected into the prompt
         changed_files = []
+        pr_details = None
         try:
             from activities.fetch_pr_details_activity import FetchPRDetailsActivity
             from models.review_models import FetchPRDetailsInput
@@ -73,21 +77,26 @@ class ReviewJob:
                 FetchPRDetailsInput(pr_id=self.config.pr_id, repository_id=self.config.repo)
             )
             changed_files = pr_details.file_changes
-            print(f"  Pre-fetched PR data: {len(changed_files)} changed files.")
+            logger.info("Pre-fetched PR data: %d changed files", len(changed_files))
         except Exception as exc:
-            print(f"  PR pre-fetch skipped: {exc}")
+            logger.warning("PR pre-fetch skipped: %s", exc)
 
         prompt = self._build_prompt(changed_files=changed_files)
 
-        # Phase 0: Build code graph (best-effort)
+        # Phase 0: Build code graph
         graph_store = None
         try:
             from graph_builder import build_graph
-            graph_store = build_graph(self.config.workspace)
+            graph_store = build_graph(self.config.workspace, changed_file_count=len(changed_files))
             if graph_store:
-                print(f"  Code graph built successfully.")
+                logger.info("Code graph built successfully")
+            else:
+                logger.warning("Graph build returned None — blast radius unavailable")
         except Exception as exc:
-            print(f"  Graph build skipped: {exc}")
+            logger.warning("Graph build failed: %s", exc)
+
+        source_commit = getattr(pr_details, "source_commit_id", "") if pr_details else ""
+        target_commit = getattr(pr_details, "target_commit_id", "") if pr_details else ""
 
         runner = OpenAIAgentRunner(
             settings=self.settings,
@@ -97,6 +106,8 @@ class ReviewJob:
             repo=self.config.repo,
             graph_store=graph_store,
             changed_files=[fc.path for fc in changed_files],
+            source_commit_id=source_commit,
+            target_commit_id=target_commit,
         )
 
         self._agent_result = runner.run(prompt, max_turns=self.config.max_turns)
@@ -165,7 +176,36 @@ class ReviewJob:
         if changed_files:
             text += self._build_changed_files_section(changed_files)
 
+        text += self._build_config_section()
+
         return text
+
+    def _build_config_section(self) -> str:
+        """Pre-load project config files so the agent doesn't waste turns reading them."""
+        config_files = [".codereview.md", ".codereview.yml", "AGENTS.md"]
+        lines = ["", "---", "", "## Pre-loaded Project Config", ""]
+
+        found_any = False
+        for name in config_files:
+            path = self.config.workspace / name
+            if path.is_file():
+                try:
+                    content = path.read_text(encoding="utf-8", errors="replace")[:5000]
+                    lines.append(f"### {name}")
+                    lines.append(f"```\n{content}\n```")
+                    lines.append("")
+                    found_any = True
+                except Exception:
+                    pass
+
+        if not found_any:
+            lines.append("No project config files found (.codereview.md, .codereview.yml, AGENTS.md).")
+            lines.append("Skip Step 1 — proceed directly to Step 2.")
+
+        lines.append("")
+        lines.append("Do NOT call `read_local_file` for these config files — they are already loaded above (or confirmed missing).")
+        lines.append("")
+        return "\n".join(lines)
 
     def _build_changed_files_section(self, file_changes) -> str:
         """Build the pre-fetched PR data section to append to the prompt."""
@@ -220,4 +260,4 @@ class ReviewJob:
             json.dumps(data, indent=2), encoding="utf-8"
         )
         count = len(data.get("findings", []))
-        print(f"  Wrote {self._findings_path} ({count} findings)")
+        logger.info("Wrote %s (%d findings)", self._findings_path, count)

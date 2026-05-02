@@ -18,10 +18,14 @@ def register_graph_tools(
     graph_store: Any,
     changed_files: List[str],
 ):
+    def _normalize_paths(files: list[str]) -> list[str]:
+        """Convert ADO-style paths to absolute paths matching graph node keys."""
+        return [str(workspace / f.lstrip("/")) for f in files]
+
     # -- get_blast_radius -------------------------------------------------------
 
     def handle_get_blast_radius(args: dict) -> str:
-        files = args["changed_files"]
+        files = _normalize_paths(args["changed_files"])
         try:
             result = graph_store.get_impact_radius(files)
             impacted_nodes = result.get("impacted_nodes", [])
@@ -76,7 +80,8 @@ def register_graph_tools(
             seen: set = set()
 
             if file_path:
-                qn = f"{file_path.lstrip('/')}::{function_name}"
+                abs_path = str(workspace / file_path.lstrip("/"))
+                qn = f"{abs_path}::{function_name}"
                 for edge in graph_store.get_edges_by_target(qn):
                     if edge.kind == "CALLS" and edge.source_qualified not in seen:
                         seen.add(edge.source_qualified)
@@ -125,7 +130,7 @@ def register_graph_tools(
     def handle_get_dependents(args: dict) -> str:
         file_path = args["file_path"]
         try:
-            cleaned = file_path.lstrip("/")
+            cleaned = str(workspace / file_path.lstrip("/"))
             edges = graph_store.get_edges_by_target(cleaned)
             imports_edges = [e for e in edges if e.kind == "IMPORTS_FROM"]
 
@@ -171,7 +176,7 @@ def register_graph_tools(
     # -- get_change_analysis ----------------------------------------------------
 
     def handle_get_change_analysis(args: dict) -> str:
-        files = args["changed_files"]
+        files = _normalize_paths(args["changed_files"])
         try:
             result = graph_store.get_impact_radius(files)
             changed_nodes = result.get("changed_nodes", [])

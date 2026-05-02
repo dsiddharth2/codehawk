@@ -7,6 +7,7 @@ All integration tests require:
 """
 
 import json
+import logging
 import os
 import subprocess
 from datetime import datetime
@@ -19,13 +20,19 @@ from config import Settings, reset_settings
 
 load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
+logger = logging.getLogger("codehawk.test")
+
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-MAX_TURNS_INTEGRATION = 15  # cap agent turns in integration tests to control cost
+MAX_TURNS_INTEGRATION = 30  # cap agent turns in integration tests to control cost
 
+# Large PR
+#PR_ID = 6435
+
+#Small PR
 PR_ID = 6571
 REPO = "BluSKYFunctionApps"
 ADO_ORG = "blub0x"
@@ -91,25 +98,30 @@ def clone_pr_workspace() -> tuple[Path, str]:
     auth_url = f"https://{pat}@dev.azure.com/{ADO_ORG}/{project_encoded}/_git/{REPO}"
 
     if (workspace / ".git").exists():
-        print(f"\n  Re-using existing clone at {workspace}")
+        logger.info("Re-using existing clone at %s", workspace)
+        # Update remote URL (handles PAT rotation) and open up refspec for any branch
         subprocess.run(
-            ["git", "fetch", "origin", source_branch],
+            ["git", "remote", "set-url", "origin", auth_url],
+            cwd=str(workspace), check=True, capture_output=True, text=True, timeout=10,
+        )
+        subprocess.run(
+            ["git", "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
+            cwd=str(workspace), check=True, capture_output=True, text=True, timeout=10,
+        )
+        subprocess.run(
+            ["git", "fetch", "origin", source_branch, "--depth", "50"],
             cwd=str(workspace), check=True, capture_output=True, text=True, timeout=60,
         )
         subprocess.run(
-            ["git", "checkout", source_branch],
+            ["git", "checkout", "-B", source_branch, f"origin/{source_branch}"],
             cwd=str(workspace), check=True, capture_output=True, text=True, timeout=30,
         )
-        subprocess.run(
-            ["git", "pull", "--ff-only"],
-            cwd=str(workspace), check=True, capture_output=True, text=True, timeout=60,
-        )
     else:
-        print(f"\n  Cloning {REPO} (branch: {source_branch})...")
+        logger.info("Cloning %s (branch: %s)...", REPO, source_branch)
         workspace.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
             ["git", "clone", "--branch", source_branch, "--depth", "50",
-             "--single-branch", auth_url, str(workspace)],
+             auth_url, str(workspace)],
             check=True, capture_output=True, text=True, timeout=120,
         )
 
@@ -122,26 +134,27 @@ def save_findings_artifact(findings_data: dict, label: str) -> Path:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = FINDINGS_OUTPUT_DIR / f"findings-pr{PR_ID}-{label}-{timestamp}.json"
     path.write_text(json.dumps(findings_data, indent=2), encoding="utf-8")
-    print(f"\n  Artifact saved: {path}")
+    logger.info("Artifact saved: %s", path)
     return path
 
 
-def print_phase2_summary(output: dict):
-    print(f"\n  Phase 2 results:")
-    print(f"    Raw findings:      {output['filtering']['total_raw']}")
-    print(f"    After confidence:  {output['filtering']['after_confidence_filter']}")
-    print(f"    After cap:         {output['filtering']['after_cap']}")
-    print(f"    Penalty:           {output['score']['total_penalty']} pts")
-    stars_str = output['score']['overall_stars'].encode('ascii', 'replace').decode('ascii')
-    print(f"    Stars:             {stars_str}")
-    print(f"    Quality:           {output['score']['quality_level']}")
-    print(f"    Gate passed:       {output['gate']['passed']}")
+def log_phase2_summary(output: dict):
+    logger.info("Phase 2 results:")
+    logger.info("  Raw findings:      %d", output["filtering"]["total_raw"])
+    logger.info("  After confidence:  %d", output["filtering"]["after_confidence_filter"])
+    logger.info("  After cap:         %d", output["filtering"]["after_cap"])
+    logger.info("  Penalty:           %s pts", output["score"]["total_penalty"])
+    stars_str = output["score"]["overall_stars"].encode("ascii", "replace").decode("ascii")
+    logger.info("  Stars:             %s", stars_str)
+    logger.info("  Quality:           %s", output["score"]["quality_level"])
+    logger.info("  Gate passed:       %s", output["gate"]["passed"])
     if output.get("usage"):
         u = output["usage"]
-        print(f"    Tokens:            {u['total_tokens']:,} (in:{u['input_tokens']:,} out:{u['output_tokens']:,})")
+        logger.info("  Tokens:            %s (in:%s out:%s)",
+                     f"{u['total_tokens']:,}", f"{u['input_tokens']:,}", f"{u['output_tokens']:,}")
         if u.get("model"):
-            print(f"    Model:             {u['model']}")
+            logger.info("  Model:             %s", u["model"])
         if u.get("duration_seconds"):
-            print(f"    Duration:          {u['duration_seconds']:.1f}s")
+            logger.info("  Duration:          %.1fs", u["duration_seconds"])
     if output.get("cost_estimate") and output["cost_estimate"].get("total_cost_usd") is not None:
-        print(f"    Estimated cost:    ${output['cost_estimate']['total_cost_usd']:.4f}")
+        logger.info("  Estimated cost:    $%.4f", output["cost_estimate"]["total_cost_usd"])

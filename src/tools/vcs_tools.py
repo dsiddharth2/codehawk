@@ -14,6 +14,8 @@ def register_vcs_tools(
     settings: Settings,
     default_pr_id: int = 0,
     default_repo: str = "",
+    source_commit_id: str = "",
+    target_commit_id: str = "",
 ):
     from activities.fetch_pr_details_activity import FetchPRDetailsActivity
     from activities.fetch_file_content_activity import FetchFileContentActivity
@@ -26,6 +28,10 @@ def register_vcs_tools(
     diff_activity = FetchFileDiffActivity(settings=settings)
 
     _known_paths: list[str] = []
+    _commit_ids: dict[str, str] = {
+        "source": source_commit_id,
+        "target": target_commit_id,
+    }
 
     def _resolve_file_path(path: str) -> str:
         """Match a potentially truncated path against known PR file paths."""
@@ -50,6 +56,9 @@ def register_vcs_tools(
 
         _known_paths.clear()
         _known_paths.extend(fc.path for fc in result.file_changes)
+
+        _commit_ids["source"] = result.source_commit_id or ""
+        _commit_ids["target"] = result.target_commit_id or ""
 
         return json.dumps({
             "pr_id": result.pr_id,
@@ -95,11 +104,24 @@ def register_vcs_tools(
 
     # -- get_file_content -----------------------------------------------------
 
+    def _resolve_commit_id(raw: str) -> str:
+        """Resolve symbolic refs like HEAD/source/target to actual SHAs."""
+        normalized = raw.strip().lower()
+        if normalized in ("head", "source", "latest"):
+            return _commit_ids.get("source", raw)
+        if normalized in ("base", "target", "main", "master"):
+            return _commit_ids.get("target", raw)
+        return raw
+
     def handle_get_file_content(args: dict) -> str:
         from models.review_models import FetchFileContentInput
 
         file_path = _resolve_file_path(args["file_path"])
-        commit_id = args["commit_id"]
+        commit_id = _resolve_commit_id(args["commit_id"])
+        if not commit_id or len(commit_id) < 7:
+            return json.dumps({
+                "error": f"Invalid commit_id '{args['commit_id']}'. Use the source_commit_id or target_commit_id from get_pr.",
+            })
         content = file_activity.execute(FetchFileContentInput(
             file_path=file_path,
             commit_id=commit_id,
@@ -112,13 +134,21 @@ def register_vcs_tools(
         schema={
             "description": (
                 "Fetch the content of a file at a specific commit SHA from the VCS. "
-                "Returns the full file text."
+                "Returns the full file text. "
+                "Use 'source' for the PR head commit or 'target' for the base commit "
+                "(or pass a full 40-char SHA from get_pr's source_commit_id/target_commit_id)."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "file_path": {"type": "string", "description": "File path relative to repo root"},
-                    "commit_id": {"type": "string", "description": "Git commit SHA to read from"},
+                    "commit_id": {
+                        "type": "string",
+                        "description": (
+                            "Commit reference: 'source' (PR head), 'target' (PR base), "
+                            "or a full 40-character SHA from get_pr output"
+                        ),
+                    },
                 },
                 "required": ["file_path", "commit_id"],
             },
@@ -171,8 +201,8 @@ def register_vcs_tools(
 
         result = diff_activity.execute(FetchFileDiffInput(
             file_path=_resolve_file_path(args["file_path"]),
-            source_commit_id=args["source_commit_id"],
-            target_commit_id=args["target_commit_id"],
+            source_commit_id=_resolve_commit_id(args["source_commit_id"]),
+            target_commit_id=_resolve_commit_id(args["target_commit_id"]),
             repository_id=args.get("repo") or None,
         ))
         return json.dumps({
@@ -188,14 +218,21 @@ def register_vcs_tools(
         schema={
             "description": (
                 "Get the unified diff for a file between two commits. "
-                "Returns diff text, added lines, removed lines, and changed sections."
+                "Returns diff text, added lines, removed lines, and changed sections. "
+                "Use 'source' and 'target' as shortcuts for PR head/base commits."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "file_path": {"type": "string", "description": "File path relative to repo root"},
-                    "source_commit_id": {"type": "string", "description": "Source (new) commit SHA"},
-                    "target_commit_id": {"type": "string", "description": "Target (old/base) commit SHA"},
+                    "source_commit_id": {
+                        "type": "string",
+                        "description": "Source (new) commit: 'source' or a 40-char SHA",
+                    },
+                    "target_commit_id": {
+                        "type": "string",
+                        "description": "Target (base) commit: 'target' or a 40-char SHA",
+                    },
                 },
                 "required": ["file_path", "source_commit_id", "target_commit_id"],
             },

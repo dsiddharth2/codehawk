@@ -11,8 +11,11 @@ Run:
 """
 
 import json
+import logging
 import os
 from collections import Counter
+from datetime import datetime
+from pathlib import Path
 
 import pytest
 
@@ -21,11 +24,67 @@ from review_job import ReviewJob, ReviewJobConfig
 
 from .conftest import (
     PR_ID, REPO, REVIEW_PROMPT,
-    MAX_TURNS_INTEGRATION,
+    MAX_TURNS_INTEGRATION, PROJECT_ROOT,
     integration, needs_ado,
     setup_ado_env, clone_pr_workspace,
-    save_findings_artifact, print_phase2_summary,
+    save_findings_artifact, log_phase2_summary,
 )
+
+_log = logging.getLogger(__name__)
+
+
+def _setup_file_logging() -> tuple[Path, logging.FileHandler]:
+    """Attach a file handler to the codehawk root logger, capturing all module logs."""
+    results_dir = PROJECT_ROOT / "results"
+    results_dir.mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    log_path = results_dir / f"pipeline-run-{PR_ID}-{timestamp}.log"
+
+    handler = logging.FileHandler(str(log_path), mode="w", encoding="utf-8")
+    handler.setLevel(logging.DEBUG)
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+
+    root = logging.getLogger("codehawk")
+    root.addHandler(handler)
+    root.setLevel(logging.DEBUG)
+
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    console.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+        datefmt="%H:%M:%S",
+    ))
+    if not root.handlers or not any(isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler) for h in root.handlers):
+        root.addHandler(console)
+
+    _log.info("Logging to: %s", log_path)
+    return log_path, handler
+
+
+def _teardown_file_logging(handler: logging.FileHandler):
+    """Remove the file handler."""
+    logging.getLogger("codehawk").removeHandler(handler)
+    handler.close()
+
+
+def _save_run_log(findings_data: dict, phase2_output: dict):
+    """Save full pipeline output to results/ with timestamp."""
+    results_dir = PROJECT_ROOT / "results"
+    results_dir.mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    log = {
+        "run_date": datetime.now().isoformat(),
+        "pr_id": PR_ID,
+        "repo": REPO,
+        "findings": findings_data,
+        "phase2": phase2_output,
+    }
+    path = results_dir / f"pipeline-run-{PR_ID}-{timestamp}.json"
+    path.write_text(json.dumps(log, indent=2), encoding="utf-8")
+    _log.info("Run log saved: %s", path)
 
 
 @integration
@@ -36,9 +95,11 @@ class TestFullPipeline:
     @pytest.fixture(autouse=True, scope="class")
     def pipeline_result(self, request):
         """Run the pipeline once, share results across all tests in this class."""
+        log_path, log_handler = _setup_file_logging()
+
         settings = setup_ado_env()
         workspace, source_branch = clone_pr_workspace()
-        print(f"  Branch: {source_branch}")
+        _log.info("Branch: %s", source_branch)
 
         model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
         config = ReviewJobConfig(
@@ -52,18 +113,23 @@ class TestFullPipeline:
 
         job = ReviewJob(config, settings=settings)
 
-        # Phase 1
-        findings_path = job.create_findings()
-        findings_data = json.loads(findings_path.read_text(encoding="utf-8"))
-        save_findings_artifact(findings_data, "openai-api")
+        try:
+            # Phase 1
+            findings_path = job.create_findings()
+            findings_data = json.loads(findings_path.read_text(encoding="utf-8"))
+            save_findings_artifact(findings_data, "openai-api")
 
-        # Phase 2
-        phase2_output = job.publish_results(dry_run=True)
-        print_phase2_summary(phase2_output)
+            # Phase 2
+            phase2_output = job.publish_results(dry_run=True)
+            log_phase2_summary(phase2_output)
+            _save_run_log(findings_data, phase2_output)
 
-        request.cls.findings_data = findings_data
-        request.cls.phase2_output = phase2_output
-        request.cls.workspace = workspace
+            request.cls.findings_data = findings_data
+            request.cls.phase2_output = phase2_output
+            request.cls.workspace = workspace
+        finally:
+            _teardown_file_logging(log_handler)
+            _log.info("Full log saved: %s", log_path)
 
     def test_findings_valid_schema(self):
         errors = pf._validate_schema(self.findings_data)
