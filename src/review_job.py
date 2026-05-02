@@ -41,6 +41,10 @@ class ReviewJobConfig:
     prompt_path: Optional[Path] = None
     prompt_text: Optional[str] = None
     vcs: str = "ado"
+    batch_index: Optional[int] = None
+    batch_total: Optional[int] = None
+    file_subset: Optional[list] = None
+    pre_built_graph: Any = None
 
     def __post_init__(self):
         self.workspace = Path(self.workspace)
@@ -67,36 +71,64 @@ class ReviewJob:
 
     def create_findings(self) -> Path:
         """Run the agent and write findings.json. Returns the path."""
-        # Pre-fetch PR data so changed_files can be injected into the prompt
         changed_files = []
         pr_details = None
-        try:
-            from activities.fetch_pr_details_activity import FetchPRDetailsActivity
-            from models.review_models import FetchPRDetailsInput
-            pr_details = FetchPRDetailsActivity(self.settings).execute(
-                FetchPRDetailsInput(pr_id=self.config.pr_id, repository_id=self.config.repo)
-            )
-            changed_files = pr_details.file_changes
-            logger.info("Pre-fetched PR data: %d changed files", len(changed_files))
-        except Exception as exc:
-            logger.warning("PR pre-fetch skipped: %s", exc)
+        skipped_count = 0
 
-        prompt = self._build_prompt(changed_files=changed_files)
+        if self.config.file_subset is not None:
+            # Batch mode: use the pre-filtered subset directly, skip PR pre-fetch
+            changed_files = self.config.file_subset
+            logger.info("Batch mode: using file_subset (%d files)", len(changed_files))
+        else:
+            # Normal mode: pre-fetch PR data so changed_files can be injected into the prompt
+            try:
+                from activities.fetch_pr_details_activity import FetchPRDetailsActivity
+                from models.review_models import FetchPRDetailsInput
+                pr_details = FetchPRDetailsActivity(self.settings).execute(
+                    FetchPRDetailsInput(pr_id=self.config.pr_id, repository_id=self.config.repo)
+                )
+                all_files = pr_details.file_changes
+                logger.info("Pre-fetched PR data: %d changed files", len(all_files))
 
-        # Phase 0: Build code graph
-        graph_store = None
-        try:
-            from graph_builder import build_graph
-            graph_store = build_graph(self.config.workspace, changed_file_count=len(changed_files))
-            if graph_store:
-                logger.info("Code graph built successfully")
-            else:
-                logger.warning("Graph build returned None — blast radius unavailable")
-        except Exception as exc:
-            logger.warning("Graph build failed: %s", exc)
+                # Filter non-code files
+                from file_filter import parse_skip_extensions, filter_changed_files
+                skip_exts = parse_skip_extensions(self.settings.skip_extensions)
+                changed_files, skipped = filter_changed_files(all_files, skip_exts)
+                skipped_count = len(skipped)
+                logger.info(
+                    "File filtering: %d code files kept, %d non-code/deleted skipped",
+                    len(changed_files), skipped_count,
+                )
+            except Exception as exc:
+                logger.warning("PR pre-fetch skipped: %s", exc)
+
+        prompt = self._build_prompt(changed_files=changed_files, skipped_count=skipped_count)
+
+        # Phase 0: Build code graph (or reuse pre-built graph from batch orchestrator)
+        graph_store = self.config.pre_built_graph
+        if graph_store is not None:
+            logger.info("Using pre-built graph from batch orchestrator")
+        else:
+            try:
+                from graph_builder import build_graph
+                graph_store = build_graph(self.config.workspace, changed_file_count=len(changed_files))
+                if graph_store:
+                    logger.info("Code graph built successfully")
+                else:
+                    logger.warning("Graph build returned None — blast radius unavailable")
+            except Exception as exc:
+                logger.warning("Graph build failed: %s", exc)
 
         source_commit = getattr(pr_details, "source_commit_id", "") if pr_details else ""
         target_commit = getattr(pr_details, "target_commit_id", "") if pr_details else ""
+
+        # Extract path strings for the runner (file_subset items may already be path strings)
+        if self.config.file_subset is not None:
+            changed_file_paths = [
+                fc if isinstance(fc, str) else fc.path for fc in changed_files
+            ]
+        else:
+            changed_file_paths = [fc.path for fc in changed_files]
 
         runner = OpenAIAgentRunner(
             settings=self.settings,
@@ -105,7 +137,7 @@ class ReviewJob:
             pr_id=self.config.pr_id,
             repo=self.config.repo,
             graph_store=graph_store,
-            changed_files=[fc.path for fc in changed_files],
+            changed_files=changed_file_paths,
             source_commit_id=source_commit,
             target_commit_id=target_commit,
         )
@@ -161,7 +193,7 @@ class ReviewJob:
     # Internals
     # ------------------------------------------------------------------
 
-    def _build_prompt(self, changed_files=None) -> str:
+    def _build_prompt(self, changed_files=None, skipped_count: int = 0) -> str:
         if self.config.prompt_text:
             text = self.config.prompt_text
         else:
@@ -174,7 +206,17 @@ class ReviewJob:
         text = text.replace("$VCS", self.config.vcs)
 
         if changed_files:
-            text += self._build_changed_files_section(changed_files)
+            text += self._build_changed_files_section(changed_files, skipped_count=skipped_count)
+
+        # Append batch context when running as part of a batched review
+        if self.config.batch_index is not None and self.config.batch_total is not None:
+            total_code_files = len(changed_files) if changed_files else 0
+            text += (
+                f"\n\n---\n\n**Batch {self.config.batch_index}/{self.config.batch_total}** — "
+                f"reviewing {total_code_files} files of the total code files in this PR. "
+                "Review ALL files assigned to this batch. "
+                "Non-code files have already been pre-filtered by the orchestrator.\n"
+            )
 
         text += self._build_config_section()
 
@@ -207,16 +249,13 @@ class ReviewJob:
         lines.append("")
         return "\n".join(lines)
 
-    def _build_changed_files_section(self, file_changes) -> str:
+    def _build_changed_files_section(self, file_changes, skipped_count: int = 0) -> str:
         """Build the pre-fetched PR data section to append to the prompt."""
-        MAX_FILES = 100
         sorted_changes = sorted(
             file_changes,
-            key=lambda fc: fc.additions + fc.deletions,
+            key=lambda fc: (fc.additions + fc.deletions) if hasattr(fc, "additions") else 0,
             reverse=True,
         )
-        truncated = len(sorted_changes) > MAX_FILES
-        display = sorted_changes[:MAX_FILES]
 
         lines = [
             "",
@@ -224,17 +263,21 @@ class ReviewJob:
             "",
             "## Pre-fetched PR Data",
             "",
-            f"The following {len(file_changes)} file(s) were changed in this PR (pre-fetched to save turns):",
+            f"The following {len(file_changes)} code file(s) were changed in this PR (pre-fetched to save turns):",
             "",
             "| File | Change | +Lines | -Lines |",
             "|------|--------|--------|--------|",
         ]
-        for fc in display:
-            lines.append(f"| `{fc.path}` | {fc.change_type} | {fc.additions} | {fc.deletions} |")
+        for fc in sorted_changes:
+            if hasattr(fc, "path"):
+                lines.append(f"| `{fc.path}` | {fc.change_type} | {fc.additions} | {fc.deletions} |")
+            else:
+                lines.append(f"| `{fc}` | — | — | — |")
 
-        if truncated:
-            omitted = len(sorted_changes) - MAX_FILES
-            lines.append(f"| ... | | | | _(and {omitted} more files — top {MAX_FILES} by change volume shown)_")
+        if skipped_count > 0:
+            lines.append(
+                f"\n_{skipped_count} non-code/deleted file(s) were filtered out and are not shown._"
+            )
 
         lines += [
             "",
