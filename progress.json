@@ -21,8 +21,8 @@
       "phase": 1,
       "title": "Create smart_diff module",
       "tier": "standard",
-      "status": "pending",
-      "commit": null
+      "status": "completed",
+      "commit": "fb312f9"
     },
     {
       "id": "v1",
