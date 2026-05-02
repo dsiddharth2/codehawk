@@ -260,8 +260,8 @@ class OpenAIAgentRunner:
                 if len(tool_result) > 1000:
                     logger.debug("  ... [%d more chars]", len(tool_result) - 1000)
 
-                if len(tool_result) > 30000:
-                    tool_result = tool_result[:30000] + "\n... [truncated, too large]"
+                if len(tool_result) > 50000:
+                    tool_result = tool_result[:50000] + "\n... [truncated, too large]"
 
                 remaining = max_turns - (turn + 1)
                 tool_result += f"\n[Turn {turn + 1}/{max_turns} used. {remaining} remaining.]"
@@ -399,8 +399,8 @@ class OpenAIAgentRunner:
                 if len(tool_result) > 1000:
                     logger.debug("  ... [%d more chars]", len(tool_result) - 1000)
 
-                if len(tool_result) > 30000:
-                    tool_result = tool_result[:30000] + "\n... [truncated, too large]"
+                if len(tool_result) > 50000:
+                    tool_result = tool_result[:50000] + "\n... [truncated, too large]"
 
                 remaining = max_turns - (turn + 1)
                 tool_result += f"\n[Turn {turn + 1}/{max_turns} used. {remaining} remaining.]"
