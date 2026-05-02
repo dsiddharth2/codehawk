@@ -198,6 +198,7 @@ def register_vcs_tools(
 
     def handle_get_file_diff(args: dict) -> str:
         from activities.fetch_file_diff_activity import FetchFileDiffInput
+        from smart_diff import summarize_diff, format_summary_for_agent, extract_hunks_in_range
 
         result = diff_activity.execute(FetchFileDiffInput(
             file_path=_resolve_file_path(args["file_path"]),
@@ -205,9 +206,52 @@ def register_vcs_tools(
             target_commit_id=_resolve_commit_id(args["target_commit_id"]),
             repository_id=args.get("repo") or None,
         ))
+
+        diff_text = result.diff_text
+        start_line = args.get("start_line")
+        end_line = args.get("end_line")
+
+        # Drill-in mode: return only hunks overlapping the requested line range
+        if start_line is not None and end_line is not None:
+            diff_text = extract_hunks_in_range(diff_text, int(start_line), int(end_line))
+            if len(diff_text) > 30000:
+                diff_text = diff_text[:30000] + "\n... [truncated at 30KB]"
+            return json.dumps({
+                "file_path": result.file_path,
+                "diff_text": diff_text,
+                "added_lines_count": len(result.added_lines),
+                "removed_lines_count": len(result.removed_lines),
+                "drill_in": True,
+                "start_line": start_line,
+                "end_line": end_line,
+            }, indent=2)
+
+        # Smart diff: summarize large diffs instead of truncating
+        summary = summarize_diff(
+            diff_text,
+            file_path=result.file_path,
+            threshold_kb=settings.smart_diff_threshold_kb,
+        )
+        if summary.is_summarized:
+            return json.dumps({
+                "file_path": result.file_path,
+                "is_summary": True,
+                "summary": format_summary_for_agent(summary),
+                "added_lines_count": len(result.added_lines),
+                "removed_lines_count": len(result.removed_lines),
+                "hint": (
+                    "Diff was too large to return in full. "
+                    "Review the hunk summary above, identify high-risk sections, "
+                    "then call get_file_diff again with start_line and end_line to drill in."
+                ),
+            }, indent=2)
+
+        # Normal diff: return full text up to 30KB safety cap
+        if len(diff_text) > 30000:
+            diff_text = diff_text[:30000] + "\n... [truncated at 30KB]"
         return json.dumps({
             "file_path": result.file_path,
-            "diff_text": result.diff_text[:10000],
+            "diff_text": diff_text,
             "added_lines_count": len(result.added_lines),
             "removed_lines_count": len(result.removed_lines),
             "changed_sections": result.changed_sections,
@@ -219,7 +263,9 @@ def register_vcs_tools(
             "description": (
                 "Get the unified diff for a file between two commits. "
                 "Returns diff text, added lines, removed lines, and changed sections. "
-                "Use 'source' and 'target' as shortcuts for PR head/base commits."
+                "Use 'source' and 'target' as shortcuts for PR head/base commits. "
+                "If the diff is too large, returns is_summary=true with hunk summaries — "
+                "use start_line/end_line to drill into specific sections."
             ),
             "parameters": {
                 "type": "object",
@@ -232,6 +278,20 @@ def register_vcs_tools(
                     "target_commit_id": {
                         "type": "string",
                         "description": "Target (base) commit: 'target' or a 40-char SHA",
+                    },
+                    "start_line": {
+                        "type": "integer",
+                        "description": (
+                            "Start line number for drill-in mode. "
+                            "When combined with end_line, returns only hunks overlapping this range."
+                        ),
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": (
+                            "End line number for drill-in mode. "
+                            "When combined with start_line, returns only hunks overlapping this range."
+                        ),
                     },
                 },
                 "required": ["file_path", "source_commit_id", "target_commit_id"],
