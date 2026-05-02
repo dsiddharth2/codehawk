@@ -28,8 +28,8 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 SCHEMA_PATH = Path(__file__).parent.parent / "commands" / "findings-schema.json"
 MIN_CONFIDENCE = 0.7
-MAX_TOTAL_FINDINGS = 30
-MAX_PER_FILE = 5
+MAX_TOTAL_FINDINGS = 50  # Default; overridden by settings.max_total_findings at runtime
+MAX_PER_FILE = 5  # Default; overridden by settings.max_per_file_findings at runtime
 CODEREVIEW_YML = ".codereview.yml"
 
 # Cost per 1M tokens: (input, output) in USD.
@@ -515,6 +515,7 @@ def _build_summary_markdown(
     comparison_md: str = "",
     usage=None,
     cost_estimate: Optional[Dict[str, Any]] = None,
+    max_total_findings: int = MAX_TOTAL_FINDINGS,
 ) -> str:
     severity_counts = {"critical": 0, "warning": 0, "suggestion": 0}
     for f in filtered_findings:
@@ -543,7 +544,7 @@ def _build_summary_markdown(
         f"- 🔴 Critical: {severity_counts.get('critical', 0)}",
         f"- ⚠️ Warning: {severity_counts.get('warning', 0)}",
         f"- 💡 Suggestion: {severity_counts.get('suggestion', 0)}",
-        f"- Total posted: {len(filtered_findings)} / {MAX_TOTAL_FINDINGS} max",
+        f"- Total posted: {len(filtered_findings)} / {max_total_findings} max",
         "",
     ]
 
@@ -695,8 +696,10 @@ def run(
 
     scorer = PRScorer(penalty_matrix=penalty_matrix, star_thresholds=star_thresholds)
 
-    # 4. Cap findings
-    capped = cap_findings(after_confidence, MAX_TOTAL_FINDINGS, MAX_PER_FILE)
+    # 4. Cap findings (read limits from settings when available)
+    max_total = settings.max_total_findings if settings else MAX_TOTAL_FINDINGS
+    max_per_file = settings.max_per_file_findings if settings else MAX_PER_FILE
+    capped = cap_findings(after_confidence, max_total, max_per_file)
 
     # 5. Fetch existing cr-ids for dedup
     vcs = findings_file.vcs
@@ -761,6 +764,7 @@ def run(
         comparison_md=comparison_md,
         usage=findings_file.usage,
         cost_estimate=cost_estimate,
+        max_total_findings=max_total,
     )
 
     if not dry_run and settings:

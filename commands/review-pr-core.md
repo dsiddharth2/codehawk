@@ -151,8 +151,10 @@ Assign a scale tier to decide how deeply to review each file.
 | T1 | 1–3 files, <100 lines changed | Full review of every file |
 | T2 | 4–10 files, <300 lines changed | Full review of every file |
 | T3 | 11–25 files, <800 lines changed | Full review of changed files; skim unchanged dependencies |
-| T4 | 26–50 files | Full review of high-risk files; skim others. Use `repomix` for large context if available. |
-| T5 | 51+ files | Focus on highest-risk paths only. Use `repomix`. Document skipped files in findings. |
+| T4 | 26–50 files | Review ALL files in your batch. Use `repomix` for large context if available. |
+| T5 | 51+ files | Review ALL files in your batch. Use `repomix`. Non-code files have been pre-filtered. |
+
+Non-code files have been pre-filtered by the orchestrator. You will only see code files in your batch.
 
 For T4/T5, prioritize files in this order:
 1. Files in security-sensitive paths (auth, crypto, permissions)
@@ -172,8 +174,8 @@ For T4/T5, prioritize files in this order:
 |------|-------|----------|
 | T1-T2 | 1–10 files | Read each file fully. Graph analysis optional. |
 | T3 | 11–25 files | Use graph priorities. Read top 15 files, skim remaining via diffs. |
-| T4 | 26–50 files | Use graph priorities. Read top 10 high-risk files. Diffs for the rest. |
-| T5 | 51+ files | Use graph priorities. Read top 8 files. Use `get_blast_radius` for cascading risks. Diffs only for remaining files. |
+| T4 | 26–50 files | Review ALL files in your batch. Use graph priorities to order your review. |
+| T5 | 51+ files | Review ALL files in your batch. Use graph priorities and `get_blast_radius` for cascading risks. |
 
 **Budget rule:** Finish all file reading by turn {max_turns - 5}. Reserve the remaining turns for findings synthesis and writing output.
 
@@ -187,6 +189,8 @@ cat /workspace/<file_path>
 ```
 
 Or for ADO, use `vcs.py get-file`. For GitHub, use `gh api` or `git show`.
+
+When `get_file_diff` returns `is_summary: true`, the diff was too large to return in full. Read the hunk summary to identify high-risk sections, then call `get_file_diff` again with `start_line` and `end_line` to drill into those sections.
 
 ### 5b — Check intent markers before flagging anything
 
