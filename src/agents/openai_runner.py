@@ -42,13 +42,15 @@ analyze these files (common for C#, SQL, config files). Fall back to DIFF-BASED 
 DIFF-BASED REVIEW (fallback when graph is empty or unavailable):
 - Use `get_file_diff` with source_commit_id and target_commit_id to review ONLY the changed lines.
 - Focus on the highest-churn files first (most additions + deletions).
-- For large PRs (50+ files): review top 10-15 files by change volume using diffs, not full reads."""
+- Review ALL files in your assigned batch — do not skip files. The orchestrator has already \
+filtered non-code files and split the PR into manageable batches."""
         if has_graph
         else """\
 NO GRAPH AVAILABLE — use diffs instead of full file reads:
 - Use `get_file_diff` to review changes without reading entire files.
 - Focus on the highest-churn files first (most additions + deletions).
-- For large PRs (50+ files): review top 10-15 files by change volume using diffs, not full reads.
+- Review ALL files in your assigned batch — do not skip files. The orchestrator has already \
+filtered non-code files and split the PR into manageable batches.
 - Use `search_code` for structural queries."""
     )
 
@@ -77,6 +79,11 @@ IMPORTANT tool mapping — use these tools instead of shell commands:
 Note: Graph tools are only available when the codebase graph was built successfully. \
 If a graph tool returns an error OR empty results, fall back to `get_file_diff` for diffs and \
 `search_code` for structural queries. Empty graph results are NOT the same as "no issues found."
+
+SMART DIFF DRILL-IN:
+- When `get_file_diff` returns `is_summary=true`, the diff was too large to return in full.
+- Read the hunk summary to identify high-risk sections (large hunks, security-sensitive areas).
+- Call `get_file_diff` again with `start_line` and `end_line` to drill into those sections.
 
 TURN EFFICIENCY:
 - Do NOT read config files (.codereview.md, .codereview.yml, AGENTS.md) — they are pre-loaded in the prompt.
