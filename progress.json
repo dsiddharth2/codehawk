@@ -1,41 +1,40 @@
 {
-  "project": "CodeHawk Agent Prompt Strategy Fix",
-  "branch": "fix/agent-prompt-strategy",
+  "project": "CodeHawk Comprehensive Documentation",
+  "branch": "docs/comprehensive-documentation",
   "base_branch": "main",
   "phases": [
     {
-      "name": "Phase 1: Harness Safety Net",
+      "name": "Phase 1: Core Documentation",
       "tasks": [
-        {"id": "task-1", "title": "Deadline injection at turn N-3", "status": "completed", "notes": "Injected deadline user message in both _run_chat_completions and _run_responses loops when turn == max_turns - 3."},
-        {"id": "task-2", "title": "Turn-count reporting in tool results", "status": "completed", "notes": "Appended [Turn X/Y used. Z remaining.] suffix to every tool result in both loops."},
-        {"id": "task-3", "title": "Fallback extraction + emergency findings", "status": "completed", "notes": "Added _scan_history_for_findings() to scan assistant messages for partial JSON. Emergency findings synthesized when scan also fails. RuntimeError in review_job.py replaced with warnings.warn(). pr_id and repo stored on runner instance. Fix: replaced broken [^{}]* bare-JSON regex with _brace_balanced_extract() to correctly handle nested JSON objects."}
+        {
+          "id": "task-1",
+          "title": "README.md — Full Rewrite with Mermaid Diagrams",
+          "status": "completed",
+          "notes": "463 lines, 3 Mermaid diagrams (architecture flowchart, scoring flowchart, pipeline sequence diagram). All 9 docs/ links verified. Committed ab52292."
+        },
+        {
+          "id": "task-2",
+          "title": "docs/README.md — Documentation Index",
+          "status": "completed",
+          "notes": "41 lines. Links to all 8 feature docs and quick-link table. Committed 74acdcc."
+        },
+        {
+          "id": "task-3",
+          "title": "docs/features/graph-tools.md — Graph Analysis (Deep)",
+          "status": "completed",
+          "notes": "268 lines. All 4 tools documented with JSON input/output examples, field tables, implementation details, Mermaid graph-first strategy flowchart, tier table, graceful degradation table. Committed 915151b."
+        },
+        {
+          "id": "task-4",
+          "title": "docs/features/agent-runner.md — Agent Runner (Deep)",
+          "status": "completed",
+          "notes": "309 lines. 3 Mermaid diagrams (class diagram, conversation loop, findings extraction cascade). API detection table, ToolRegistry internals, system prompt content, turn budget layers, AgentResult table, ReviewJob usage example. Committed bbb9e2e."
+        }
       ],
-      "verify": {"status": "blocked", "notes": "Code committed and pushed to origin/fix/agent-prompt-strategy. Task 3 regex fix applied per review feedback. pytest blocked by permission model — requires PM to run: python -m pytest tests/unit/ -v"}
-    },
-    {
-      "name": "Phase 2: Data Flow + System Prompt",
-      "tasks": [
-        {"id": "task-4", "title": "Pre-fetch PR data and inject changed_files", "status": "completed", "notes": "Added pre-fetch of FetchPRDetailsActivity in create_findings() before building prompt. Passes actual file_changes to _build_prompt() and runner (replacing changed_files=[]). Added _build_changed_files_section() appending a Pre-fetched PR Data table (top 100 files by change volume) with instruction to use get_change_analysis and NOT call get_pr."},
-        {"id": "task-5", "title": "Rewrite SYSTEM_PROMPT as build_system_prompt()", "status": "completed", "notes": "Replaced SYSTEM_PROMPT constant with build_system_prompt(max_turns, has_graph) -> str. States turn budget. When has_graph=True mandates graph-first strategy (first call must be get_change_analysis, no file-by-file reading). When has_graph=False instructs get_file_diff / search_code. Added self.has_graph = graph_store is not None in __init__. Updated both run methods to call build_system_prompt(max_turns, self.has_graph)."}
-      ],
-      "verify": {"status": "blocked", "notes": "Code committed and pushed to origin/fix/agent-prompt-strategy. pytest blocked by permission model — requires PM to run: python -m pytest tests/unit/ -v"}
-    },
-    {
-      "name": "Phase 3: Review Prompt Updates",
-      "tasks": [
-        {"id": "task-6", "title": "Make Step 2b mandatory, remove T1-T2 skip", "status": "completed", "notes": "Renamed heading to MANDATORY, removed T1-T2 skip clause, added REQUIRED statement, changed instruction to explicitly call get_change_analysis with PR Data section paths, added ranked review plan rule (risk_score > 0.5 first, then test_gaps, then remainder)."},
-        {"id": "task-7", "title": "Tier-based review strategy + deadline warning", "status": "completed", "notes": "Added tier-based review depth table to Step 5 preamble (T1-T2 read all, T3 top-15+diffs, T4 top-10+diffs, T5 top-8+blast_radius+diffs). Added budget rule: finish reading by turn {max_turns - 5}. Added CRITICAL deadline warning at top of Step 7: stop reading at turn 35+ and produce findings immediately."}
-      ],
-      "verify": {"status": "blocked", "notes": "Code committed and pushed to origin/fix/agent-prompt-strategy. Prompt changes do not affect Python tests. requires PM to run: python -m pytest tests/ -v and manually review prompt text in commands/review-pr-core.md for consistency."}
-    },
-    {
-      "name": "Phase 4: Test Coverage",
-      "tasks": [
-        {"id": "task-8", "title": "Unit tests for deadline injection and turn budget", "status": "completed", "notes": "Created tests/unit/test_turn_budget.py. Covers: build_system_prompt() content (graph/no-graph, turn budget), deadline injection at N-3 in chat completions loop, deadline NOT injected before N-3, deadline injection in responses API loop, turn counter in tool results, emergency fallback when agent produces no JSON."},
-        {"id": "task-9", "title": "Unit tests for changed_files and fallback extraction", "status": "completed", "notes": "Created tests/unit/test_review_job.py. Covers: _scan_history_for_findings() (code fence, bare JSON, empty input, largest match, cr-id pattern, invalid JSON), create_findings() propagates non-empty changed_files to runner, graceful degradation on fetch failure, prompt Pre-fetched PR Data section present, emergency findings schema validity."},
-        {"id": "task-10", "title": "Integration test cost control (15 turns cap)", "status": "completed", "notes": "Added MAX_TURNS_INTEGRATION = 15 to tests/integration/conftest.py. Updated test_full_pipeline.py to import and use this constant instead of hardcoded 40. Reduces integration test token cost by ~62%."}
-      ],
-      "verify": {"status": "blocked", "notes": "All 3 tasks committed and pushed to origin/fix/agent-prompt-strategy (commits 44daa86, dbc106a, 49cfd66). Full test suite run blocked by permission model — requires PM to run: python -m pytest tests/ --tb=short -v"}
+      "verify": {
+        "status": "completed",
+        "notes": "All 4 files exist and non-empty (463 + 41 + 268 + 309 lines). README.md has 3 Mermaid diagrams. agent-runner.md has 3 Mermaid diagrams. graph-tools.md has 1 Mermaid diagram. All 8 feature docs exist in docs/features/. architecture.md exists. All docs/ links in README.md resolve. No content duplicated from existing docs — all graph-tools and agent-runner content is new deep documentation."
+      }
     }
   ]
 }
