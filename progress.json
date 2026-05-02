@@ -13,8 +13,8 @@
       "phase": 1,
       "title": "Create file_filter module",
       "tier": "cheap",
-      "status": "pending",
-      "commit": null
+      "status": "completed",
+      "commit": "dc89ac0"
     },
     {
       "id": 3,
