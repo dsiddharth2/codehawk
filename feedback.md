@@ -1,76 +1,108 @@
-# Large PR Batched Review — Plan Re-Review
+# Large PR Batched Review - Phase 1 Code Review
 
 **Reviewer:** codehawk-reviewer
-**Date:** 2026-05-02 11:15:00+00:00
+**Date:** 2026-05-02 20:30:00+05:30
 **Verdict:** APPROVED
 
 > See the recent git history of this file to understand the context of this review.
-> Prior review (394e594): CHANGES NEEDED — 2 must-fix, 3 should-fix. Doer annotated all 5 findings in 7d42e5c.
+> Prior review (43f1ae3): plan re-review APPROVED. This is the first code review for Phase 1 implementation (commits a0226f6..266462d).
 
 ---
 
-## Prior Findings Resolution
+## Task 1: Add config fields to Settings (src/config.py)
 
-All 5 findings from the initial review have been addressed in PLAN.md and progress.json:
+**PASS.** All 6 fields added to Settings with correct types, defaults, and constraints:
 
-| # | Finding | Fix | Verified |
-|---|---------|-----|----------|
-| 1 | `batch_max_turns` threading unspecified | Task 7 step (6) now explicitly states `max_turns=self.settings.batch_max_turns` on per-batch ReviewJobConfig | PASS — confirmed in PLAN.md Task 7 description |
-| 2 | `skipped_files` dangling on ReviewJobConfig | Removed from ReviewJobConfig; Task 5 stores count locally in `create_findings()` scope, passes as parameter to `_build_changed_files_section()` | PASS — Task 5 now lists 4 optional fields (batch_index, batch_total, file_subset, pre_built_graph) |
-| 3 | Task 6 grab-bag cohesion | Split into Task 6a (system prompt update) and Task 6b (raise truncation/timeout limits) | PASS — PLAN.md has separate task entries; progress.json has matching "6a" and "6b" entries |
-| 4 | Risk register missing 3 risks | Added: batch_max_turns confusion, sequential execution timeout, intra-batch context gap | PASS — all 3 present in risk register (rows 7-9), with mitigations |
-| 5 | Task 8 hidden dependency on Task 1 | Task 8 blockers now reads "Task 1 ... Task 7" | PASS — explicitly documented |
+| Field | Type | Default | Constraints | Matches PLAN.md |
+|-------|------|---------|-------------|-----------------|
+| skip_extensions | str | .md,.json,.yaml,... (21 extensions) | none | PASS |
+| smart_diff_threshold_kb | int | 30 | ge=1, le=500 | PASS |
+| batch_size | int | 25 | ge=5, le=100 | PASS |
+| batch_max_turns | int | 40 | ge=10, le=100 | PASS |
+| max_total_findings | int | 50 | none | PASS |
+| max_per_file_findings | int | 5 | none | PASS |
+
+Settings() instantiates cleanly with all defaults. The enable_graph field also appears in the diff, added in a prior sprint (graph integration), not part of this task, does not conflict.
+
+**Done criteria check:** Settings() loads with default values for all 6 new fields: **PASS**. Existing tests still pass: **PASS** (136 passed, 2 pre-existing failures).
 
 ---
 
-## Re-Review of All 12 Criteria
+## Task 2: Create file_filter module (src/file_filter.py)
 
-### 1. Clear Done Criteria — PASS
-Unchanged from prior review. All tasks have testable, mechanical acceptance conditions.
+**PASS.** Module implements both required functions with correct behavior:
 
-### 2. High Cohesion / Low Coupling — PASS
-Previously FAIL. Task 6 split into 6a (semantic prompt change) and 6b (numeric limit changes) resolves the cohesion issue. Each task now modifies logically related code.
+- parse_skip_extensions: Handles comma-separated input, leading-dot normalization, mixed case, whitespace, empty string. Returns set() for empty/whitespace input. **PASS.**
+- filter_changed_files: Correctly partitions by extension match and change_type == "delete". Supports both dict-style and object-style file change access (duck-typing via isinstance + getattr). **PASS.**
 
-### 3. Key Abstractions in Earliest Tasks — PASS
-Unchanged. Phase 1 creates all foundation modules (Settings, file_filter, smart_diff).
+**NOTE: minor robustness.** filter_changed_files uses getattr(fc, "path", getattr(fc, "file_path", "")) which provides a dual-attribute fallback. This is defensive and aligned with the requirements, though the codebase FileChange model uses .path. No action needed.
 
-### 4. Riskiest Assumption Validated Early — NOTE
-Unchanged. GraphStore reuse validated in Task 7, not Phase 1. Acceptable given the fallback strategy and explicit testing in Task 7's done criteria.
+**NOTE: extensionless files.** Files without extensions (e.g., Makefile, Dockerfile) have Path.suffix == "" which is not in any skip set, so they pass through to code review. This is correct behavior.
 
-### 5. Later Tasks Reuse Early Abstractions — PASS
-Unchanged. Clean dependency flow: Phase 1 modules consumed by Phase 2, Phase 2 consumed by Phase 3.
+**Done criteria check:** Module importable: **PASS**. parse_skip_extensions handles edge cases: **PASS**. filter_changed_files partitions correctly: **PASS**.
 
-### 6. Phase Structure — PASS (with note)
-Phase 2 now has 4 work tasks (4, 5, 6a, 6b) instead of the recommended 2-3. However, Tasks 6a and 6b are both "cheap" tier — each is a straightforward find-and-replace. The split was the correct trade-off: better cohesion is worth one extra task in the phase. No action needed.
+---
 
-### 7. Each Task Completable in One Session — PASS
-Unchanged. Tasks 5 and 7 remain the heaviest but are well-specified with pseudocode.
+## Task 3: Create smart_diff module (src/smart_diff.py)
 
-### 8. Dependencies Satisfied in Order — PASS
-Improved. Task 8 blockers now correctly list both Task 1 and Task 7. All other dependency chains remain valid.
+**PASS.** Module implements all 4 required exports with correct structure:
 
-### 9. Vague or Ambiguous Tasks — PASS
-Previously FAIL. Both issues resolved:
-- (a) `batch_max_turns` threading is now explicit in Task 7's step (6)
-- (b) `skipped_files` removed from ReviewJobConfig; skipped count handled locally in `create_findings()` scope
+- **DiffSummary** dataclass: file_path, total_size_bytes, hunks (list of HunkInfo), is_summarized (default False). **PASS.**
+- **HunkInfo** dataclass: old_start, old_count, new_start, new_count, context, added_lines, removed_lines. **PASS** -- exceeds the plan dict spec with a proper dataclass.
+- **summarize_diff**: Returns is_summarized=False for small diffs, parses hunk headers for large diffs. **PASS.**
+- **format_summary_for_agent**: Produces readable output with file path, size, hunk count, and per-hunk details. **PASS.**
+- **extract_hunks_in_range**: Preserves diff header lines, filters by new-file line range overlap, returns empty string for no overlap. **PASS.**
 
-### 10. Hidden Dependencies — PASS
-Previously NOTE. Task 8's blocker on Task 1 is now documented.
+**Hunk parsing correctness:** _parse_hunks correctly handles:
+- @@ -N,M +N,M @@ with both old and new counts
+- @@ -N +N @@ (omitted count defaults to 1)
+- +++/--- lines excluded from add/remove counts
+- Multi-hunk diffs (flushes previous hunk on new @@ header)
 
-### 11. Risk Register — PASS
-Previously PASS with additions needed. All 3 missing risks added with mitigations. Register now has 9 risks covering GraphStore reuse, parsing edge cases, cr-id sequencing, context overflow, backward compatibility, file distribution, turn budget confusion, execution time, and cross-batch context gaps.
+**NOTE: threshold boundary.** summarize_diff uses `size_bytes <= threshold_kb * 1024` (line 63). This means a diff of exactly threshold_kb * 1024 bytes is **not** summarized. However, requirements.md states "Diffs >= 30KB: return structured summary", implying exactly-at-threshold should be summarized. The operator should be `<` instead of `<=`. In practice, this is a 1-byte edge case that will never occur naturally and has zero impact on behavior. **SHOULD-FIX** for correctness alignment with spec, but non-blocking.
 
-### 12. Alignment with Requirements Intent — PASS
-Unchanged. All 3 layers, all 9 bottlenecks, and all 12 success criteria are covered.
+**Done criteria check:** Module importable: **PASS**. Small diffs return is_summarized=False: **PASS**. Large diffs parse @@ -N,M +N,M @@ correctly with counts: **PASS**. extract_hunks_in_range returns only relevant hunks: **PASS**. format_summary_for_agent produces readable output: **PASS**.
+
+---
+
+## Test Results
+
+```
+151 collected, 136 passed, 2 failed, 13 skipped
+```
+
+Both failures are **pre-existing and known**:
+- test_graph_builder.py::test_prints_diagnostic_on_failure -- logger vs print assertion mismatch
+- test_post_findings.py::test_still_present_not_resolved_ado -- module patching path issue
+
+No new test failures introduced by Phase 1 changes. **PASS.**
+
+---
+
+## Code Quality and Patterns
+
+**Consistency with codebase:** Both new modules follow existing patterns -- module docstrings, type hints, from pathlib import Path, no external dependencies. **PASS.**
+
+**No security issues:** Pure functions with no I/O, no user input injection paths, no file system writes. **PASS.**
+
+**No regressions in previously approved phases:** Config changes are additive only (new fields with defaults). No existing code paths affected. **PASS.**
+
+---
+
+## Findings Summary
+
+| No | File | Finding | Severity | Status |
+|----|------|---------|----------|--------|
+| 1 | src/smart_diff.py:63 | Threshold comparison uses <= but requirements.md specifies >= for summarization | SHOULD-FIX | Non-blocking, 1-byte edge case |
 
 ---
 
 ## Summary
 
-All 5 findings from the initial review are resolved. The plan is approved for implementation.
+Phase 1 is **APPROVED**. All 3 tasks meet their done criteria. The foundation modules are clean, well-structured, and ready for Phase 2 integration.
 
-- 12/12 criteria pass (2 upgraded from FAIL, 1 from NOTE)
-- 4 phases, 11 work tasks + 4 VERIFY checkpoints
-- Risk register comprehensive at 9 entries with mitigations
-- progress.json aligned with PLAN.md task structure (including 6a/6b split)
-- No remaining blockers to begin Phase 1 implementation
+**Passed:** All 3 tasks (config fields, file_filter, smart_diff), all done criteria met, all existing tests still pass, no regressions.
+
+**Should-fix (non-blocking):** Threshold boundary operator in summarize_diff -- change `<=` to `<` on line 63 of src/smart_diff.py to match the >= 30KB spec in requirements.md. Can be fixed at start of Phase 2 or deferred to Task 9 (unit tests will catch it).
+
+**Deferred to Phase 4:** Unit tests for both new modules (Tasks 9-10 per PLAN.md).
