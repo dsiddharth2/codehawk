@@ -5,8 +5,8 @@
       "phase": 1,
       "title": "Add config fields to Settings",
       "tier": "cheap",
-      "status": "pending",
-      "commit": null
+      "status": "completed",
+      "commit": "a0226f6"
     },
     {
       "id": 2,
