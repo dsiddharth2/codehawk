@@ -79,24 +79,27 @@
       "phase": 3,
       "title": "Create BatchReviewJob orchestrator",
       "tier": "premium",
-      "status": "pending",
-      "commit": null
+      "status": "completed",
+      "commit": "163d932",
+      "notes": "Created src/batch_review_job.py with BatchReviewJob class. Pre-fetches PR data once, filters non-code files, builds graph once, single-session shortcut for small PRs, round-robin batch splitting by churn, sequential batch execution via ReviewJob, merge with dedup/re-sequence/sum-usage, failed batch resilience. 136 tests pass (2 pre-existing failures)."
     },
     {
       "id": 8,
       "phase": 3,
       "title": "Update run_agent.py, review prompt, and post_findings caps",
       "tier": "standard",
-      "status": "pending",
-      "commit": null
+      "status": "completed",
+      "commit": "3ca701b",
+      "notes": "run_agent.py uses BatchReviewJob. review-pr-core.md updated T4/T5 to 'Review ALL files in your batch', added smart diff drill-in guidance, added pre-filtered note. post_findings.py reads caps from settings at runtime. 136 tests pass."
     },
     {
       "id": "v3",
       "phase": 3,
       "title": "VERIFY: Phase 3 — Orchestrator",
       "tier": "verify",
-      "status": "pending",
-      "commit": null
+      "status": "completed",
+      "commit": "3ca701b",
+      "notes": "pytest: 136 passed, 13 skipped, 2 pre-existing failures (test_prints_diagnostic_on_failure in graph_builder, test_still_present_not_resolved_ado in post_findings — both confirmed pre-existing on main). Verified: run_agent.py imports BatchReviewJob, post_findings reads caps from settings (max_total_findings, max_per_file_findings), review prompt updated with 'Review ALL files in your batch', smart diff drill-in guidance, and pre-filtered note. No regressions."
     },
     {
       "id": 9,
