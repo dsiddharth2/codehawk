@@ -38,40 +38,41 @@
       "phase": 2,
       "title": "Integrate smart diff into vcs_tools.py",
       "tier": "standard",
-      "status": "pending",
-      "commit": null
+      "status": "completed",
+      "commit": "c167dd8"
     },
     {
       "id": 5,
       "phase": 2,
       "title": "Integrate filtering + batch fields into review_job.py",
       "tier": "standard",
-      "status": "pending",
-      "commit": null
+      "status": "completed",
+      "commit": "5fc6996"
     },
     {
       "id": "6a",
       "phase": 2,
       "title": "Update system prompt for batched review",
       "tier": "cheap",
-      "status": "pending",
-      "commit": null
+      "status": "completed",
+      "commit": "c586d4f"
     },
     {
       "id": "6b",
       "phase": 2,
       "title": "Raise truncation and timeout limits",
       "tier": "cheap",
-      "status": "pending",
-      "commit": null
+      "status": "completed",
+      "commit": "4fc662e"
     },
     {
       "id": "v2",
       "phase": 2,
       "title": "VERIFY: Phase 2 — Integration",
       "tier": "verify",
-      "status": "pending",
-      "commit": null
+      "status": "completed",
+      "commit": "4fc662e",
+      "notes": "pytest: 136 passed, 13 skipped, 2 pre-existing failures (test_prints_diagnostic_on_failure in graph_builder, test_still_present_not_resolved_ado in post_findings — both confirmed pre-existing on main). Schema verified: get_file_diff has start_line/end_line params. Prompt verified: 'Review ALL files' + smart diff drill-in instructions. Limits verified: tool result 50KB, search 25KB, read 1000 lines, graph 600s for 51-100 files. ReviewJobConfig has batch_index, batch_total, file_subset, pre_built_graph."
     },
     {
       "id": 7,
