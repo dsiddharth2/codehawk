@@ -10,6 +10,7 @@ Tools are registered via the ToolRegistry from src/tools/.
 """
 
 import json
+import logging
 import os
 import re
 import time
@@ -23,6 +24,8 @@ from tools.registry import ToolRegistry
 from tools.vcs_tools import register_vcs_tools
 from tools.workspace_tools import register_workspace_tools
 
+logger = logging.getLogger("codehawk.agent")
+
 
 def build_system_prompt(max_turns: int, has_graph: bool) -> str:
     """Build the system prompt dynamically based on turn budget and graph availability."""
@@ -30,13 +33,22 @@ def build_system_prompt(max_turns: int, has_graph: bool) -> str:
         """\
 GRAPH-FIRST STRATEGY (graph tools are available):
 - Your FIRST tool call MUST be `get_change_analysis`. Use its output to prioritize your review.
+- If `get_change_analysis` returns empty results (risk_score=0, empty arrays), the graph could not \
+analyze these files (common for C#, SQL, config files). Fall back to DIFF-BASED REVIEW below.
 - Do NOT read files one-by-one. Use graph analysis to identify high-risk files, then read only those.
 - Use `get_blast_radius` for T5 PRs (51+ files) to find cascading risks.
-- Use `get_callers` / `get_dependents` for precise structural queries instead of `search_code`."""
+- Use `get_callers` / `get_dependents` for precise structural queries instead of `search_code`.
+
+DIFF-BASED REVIEW (fallback when graph is empty or unavailable):
+- Use `get_file_diff` with source_commit_id and target_commit_id to review ONLY the changed lines.
+- Focus on the highest-churn files first (most additions + deletions).
+- For large PRs (50+ files): review top 10-15 files by change volume using diffs, not full reads."""
         if has_graph
         else """\
 NO GRAPH AVAILABLE — use diffs instead of full file reads:
 - Use `get_file_diff` to review changes without reading entire files.
+- Focus on the highest-churn files first (most additions + deletions).
+- For large PRs (50+ files): review top 10-15 files by change volume using diffs, not full reads.
 - Use `search_code` for structural queries."""
     )
 
@@ -63,7 +75,13 @@ IMPORTANT tool mapping — use these tools instead of shell commands:
 - To find files importing a module → use `get_dependents`
 
 Note: Graph tools are only available when the codebase graph was built successfully. \
-If a graph tool returns an error, fall back to `search_code` or `read_local_file`.
+If a graph tool returns an error OR empty results, fall back to `get_file_diff` for diffs and \
+`search_code` for structural queries. Empty graph results are NOT the same as "no issues found."
+
+TURN EFFICIENCY:
+- Do NOT read config files (.codereview.md, .codereview.yml, AGENTS.md) — they are pre-loaded in the prompt.
+- Prefer `get_file_diff` over `read_local_file` for reviewing changes — diffs show exactly what changed.
+- Only use `read_local_file` when you need full file context (e.g., understanding a class structure).
 
 When you have completed your review, output the findings JSON as your final message. \
 Do NOT attempt to write files — just output the JSON directly in a ```json code fence. \
@@ -102,6 +120,8 @@ class OpenAIAgentRunner:
         repo: str = "",
         graph_store=None,
         changed_files=None,
+        source_commit_id: str = "",
+        target_commit_id: str = "",
     ):
         self.settings = settings
         self.workspace = Path(workspace)
@@ -121,6 +141,8 @@ class OpenAIAgentRunner:
             settings=settings,
             default_pr_id=pr_id,
             default_repo=repo,
+            source_commit_id=source_commit_id,
+            target_commit_id=target_commit_id,
         )
         register_workspace_tools(self.registry, workspace=self.workspace)
         if graph_store is not None:
@@ -152,9 +174,8 @@ class OpenAIAgentRunner:
 
         tool_defs = self.registry.openai_definitions()
 
-        print(f"\n  OpenAI API runner [Chat Completions]: model={self.model}, max_turns={max_turns}")
-        print(f"  Prompt length: {len(prompt)} chars")
-        print(f"  --- agent conversation below ---\n", flush=True)
+        logger.info("Agent started [Chat Completions]: model=%s, max_turns=%d", self.model, max_turns)
+        logger.info("Prompt length: %d chars", len(prompt))
 
         for turn in range(max_turns):
             result.turns = turn + 1
@@ -166,7 +187,7 @@ class OpenAIAgentRunner:
                     "with whatever findings you have collected so far. Partial output is required."
                 )
                 messages.append({"role": "user", "content": deadline_msg})
-                print(f"  [DEADLINE INJECTION: turn {turn + 1}, 3 turns remaining]", flush=True)
+                logger.warning("DEADLINE INJECTION: turn %d, 3 turns remaining", turn + 1)
 
             try:
                 response = self.client.chat.completions.create(
@@ -175,7 +196,7 @@ class OpenAIAgentRunner:
                     tools=tool_defs,
                 )
             except Exception as e:
-                print(f"\n  ERROR: API call failed: {e}")
+                logger.error("API call failed: %s", e)
                 result.returncode = 1
                 break
 
@@ -187,28 +208,29 @@ class OpenAIAgentRunner:
             choice = response.choices[0]
             assistant_msg = choice.message
 
-            print(f"\n{'='*80}", flush=True)
-            print(f"  Turn {turn + 1}  |  finish_reason={choice.finish_reason}", flush=True)
-            print(f"{'='*80}", flush=True)
+            logger.info(
+                "Turn %d/%d | finish_reason=%s | tokens_this_turn=%s",
+                turn + 1, max_turns, choice.finish_reason,
+                response.usage.total_tokens if response.usage else "?",
+            )
 
             if assistant_msg.content:
                 text = assistant_msg.content
                 result.raw_final_message = text
                 if choice.finish_reason == "stop" and len(text) > 3000:
-                    print(f"\n  [Assistant response — {len(text)} chars, showing first 3000]\n", flush=True)
-                    print(text[:3000], flush=True)
-                    print(f"\n  ... [{len(text) - 3000} more chars — full JSON in findings.json]\n", flush=True)
+                    logger.info("Assistant response: %d chars (showing first 3000)", len(text))
+                    logger.debug("Assistant response (truncated):\n%s", text[:3000])
                 else:
-                    print(f"\n{text}\n", flush=True)
+                    logger.info("Assistant response:\n%s", text)
 
             messages.append(assistant_msg.model_dump())
 
             if choice.finish_reason == "stop":
-                print(f"  >>> Agent finished. <<<", flush=True)
+                logger.info("Agent finished after %d turns", turn + 1)
                 break
 
             if not assistant_msg.tool_calls:
-                print(f"  No tool calls, stopping.", flush=True)
+                logger.info("No tool calls, stopping at turn %d", turn + 1)
                 break
 
             for tc in assistant_msg.tool_calls:
@@ -219,18 +241,17 @@ class OpenAIAgentRunner:
                 except json.JSONDecodeError:
                     fn_args = {}
 
-                print(f"\n  >> Tool call: {fn_name}({_summarize_args(fn_args)})", flush=True)
+                logger.info("Tool call: %s(%s)", fn_name, _summarize_args(fn_args))
 
                 try:
                     tool_result = self.registry.dispatch(fn_name, fn_args)
                 except Exception as e:
                     tool_result = json.dumps({"error": str(e), "type": type(e).__name__})
-                    print(f"     ERROR: {e}", flush=True)
+                    logger.error("Tool %s failed: %s", fn_name, e)
 
-                preview = tool_result[:500]
-                if len(tool_result) > 500:
-                    preview += f"\n     ... [{len(tool_result) - 500} more chars]"
-                print(f"     Result: {preview}", flush=True)
+                logger.debug("Tool result [%s]: %s", fn_name, tool_result[:1000])
+                if len(tool_result) > 1000:
+                    logger.debug("  ... [%d more chars]", len(tool_result) - 1000)
 
                 if len(tool_result) > 30000:
                     tool_result = tool_result[:30000] + "\n... [truncated, too large]"
@@ -245,10 +266,10 @@ class OpenAIAgentRunner:
                 })
 
         result.duration_seconds = round(time.time() - start_time, 1)
-        _print_run_summary(result)
+        _log_run_summary(result)
         result.findings_data = _extract_findings_json(result.raw_final_message)
         if result.findings_data is None:
-            print("  [Fallback] Scanning conversation history for partial findings...", flush=True)
+            logger.warning("Primary extraction failed — scanning conversation history for findings...")
             assistant_texts = [
                 msg.get("content") or ""
                 for msg in messages
@@ -256,7 +277,7 @@ class OpenAIAgentRunner:
             ]
             result.findings_data = _scan_history_for_findings(assistant_texts)
         if result.findings_data is None:
-            print("  [Emergency] Synthesizing minimal findings — agent exhausted turn budget.", flush=True)
+            logger.error("Emergency synthesis — agent exhausted turn budget without producing findings")
             result.findings_data = {
                 "pr_id": self.pr_id,
                 "repo": self.repo,
@@ -266,7 +287,7 @@ class OpenAIAgentRunner:
                 "fix_verifications": [],
                 "error": "Agent exhausted turn budget without producing findings",
             }
-        _print_findings_summary(result)
+        _log_findings_summary(result)
         return result
 
     # ------------------------------------------------------------------
@@ -280,9 +301,8 @@ class OpenAIAgentRunner:
 
         tool_defs = self.registry.responses_definitions()
 
-        print(f"\n  OpenAI API runner [Responses]: model={self.model}, max_turns={max_turns}")
-        print(f"  Prompt length: {len(prompt)} chars")
-        print(f"  --- agent conversation below ---\n", flush=True)
+        logger.info("Agent started [Responses]: model=%s, max_turns=%d", self.model, max_turns)
+        logger.info("Prompt length: %d chars", len(prompt))
 
         input_items = [{"type": "message", "role": "user", "content": prompt}]
         previous_response_id = None
@@ -298,7 +318,7 @@ class OpenAIAgentRunner:
                     "with whatever findings you have collected so far. Partial output is required."
                 )
                 input_items.append({"type": "message", "role": "user", "content": deadline_msg})
-                print(f"  [DEADLINE INJECTION: turn {turn + 1}, 3 turns remaining]", flush=True)
+                logger.warning("DEADLINE INJECTION: turn %d, 3 turns remaining", turn + 1)
 
             try:
                 kwargs = {
@@ -314,7 +334,7 @@ class OpenAIAgentRunner:
 
                 response = self.client.responses.create(**kwargs)
             except Exception as e:
-                print(f"\n  ERROR: API call failed: {e}")
+                logger.error("API call failed: %s", e)
                 result.returncode = 1
                 break
 
@@ -325,9 +345,11 @@ class OpenAIAgentRunner:
                 result.output_tokens += response.usage.output_tokens
                 result.total_tokens += response.usage.input_tokens + response.usage.output_tokens
 
-            print(f"\n{'='*80}", flush=True)
-            print(f"  Turn {turn + 1}  |  status={response.status}", flush=True)
-            print(f"{'='*80}", flush=True)
+            logger.info(
+                "Turn %d/%d | status=%s | tokens_this_turn=%s",
+                turn + 1, max_turns, response.status,
+                (response.usage.input_tokens + response.usage.output_tokens) if response.usage else "?",
+            )
 
             function_calls = []
             for item in response.output:
@@ -338,16 +360,15 @@ class OpenAIAgentRunner:
                             result.raw_final_message = text
                             all_assistant_texts.append(text)
                             if len(text) > 3000:
-                                print(f"\n  [Assistant response — {len(text)} chars, showing first 3000]\n", flush=True)
-                                print(text[:3000], flush=True)
-                                print(f"\n  ... [{len(text) - 3000} more chars — full JSON in findings.json]\n", flush=True)
+                                logger.info("Assistant response: %d chars (showing first 3000)", len(text))
+                                logger.debug("Assistant response (truncated):\n%s", text[:3000])
                             else:
-                                print(f"\n{text}\n", flush=True)
+                                logger.info("Assistant response:\n%s", text)
                 elif item.type == "function_call":
                     function_calls.append(item)
 
             if not function_calls:
-                print(f"  >>> Agent finished. <<<", flush=True)
+                logger.info("Agent finished after %d turns", turn + 1)
                 break
 
             input_items = []
@@ -359,18 +380,17 @@ class OpenAIAgentRunner:
                 except json.JSONDecodeError:
                     fn_args = {}
 
-                print(f"\n  >> Tool call: {fn_name}({_summarize_args(fn_args)})", flush=True)
+                logger.info("Tool call: %s(%s)", fn_name, _summarize_args(fn_args))
 
                 try:
                     tool_result = self.registry.dispatch(fn_name, fn_args)
                 except Exception as e:
                     tool_result = json.dumps({"error": str(e), "type": type(e).__name__})
-                    print(f"     ERROR: {e}", flush=True)
+                    logger.error("Tool %s failed: %s", fn_name, e)
 
-                preview = tool_result[:500]
-                if len(tool_result) > 500:
-                    preview += f"\n     ... [{len(tool_result) - 500} more chars]"
-                print(f"     Result: {preview}", flush=True)
+                logger.debug("Tool result [%s]: %s", fn_name, tool_result[:1000])
+                if len(tool_result) > 1000:
+                    logger.debug("  ... [%d more chars]", len(tool_result) - 1000)
 
                 if len(tool_result) > 30000:
                     tool_result = tool_result[:30000] + "\n... [truncated, too large]"
@@ -385,13 +405,13 @@ class OpenAIAgentRunner:
                 })
 
         result.duration_seconds = round(time.time() - start_time, 1)
-        _print_run_summary(result)
+        _log_run_summary(result)
         result.findings_data = _extract_findings_json(result.raw_final_message)
         if result.findings_data is None:
-            print("  [Fallback] Scanning conversation history for partial findings...", flush=True)
+            logger.warning("Primary extraction failed — scanning conversation history for findings...")
             result.findings_data = _scan_history_for_findings(all_assistant_texts)
         if result.findings_data is None:
-            print("  [Emergency] Synthesizing minimal findings — agent exhausted turn budget.", flush=True)
+            logger.error("Emergency synthesis — agent exhausted turn budget without producing findings")
             result.findings_data = {
                 "pr_id": self.pr_id,
                 "repo": self.repo,
@@ -401,22 +421,24 @@ class OpenAIAgentRunner:
                 "fix_verifications": [],
                 "error": "Agent exhausted turn budget without producing findings",
             }
-        _print_findings_summary(result)
+        _log_findings_summary(result)
         return result
 
 
-def _print_run_summary(result: AgentResult):
-    print(f"\n  --- agent conversation above ---")
-    print(f"  Turns: {result.turns}, Tool calls: {result.tool_calls_count}")
-    print(f"  Tokens: {result.total_tokens:,} (in:{result.input_tokens:,} out:{result.output_tokens:,})")
-    print(f"  Duration: {result.duration_seconds}s")
+def _log_run_summary(result: AgentResult):
+    logger.info(
+        "Run complete: turns=%d, tool_calls=%d, tokens=%s (in:%s out:%s), duration=%.1fs",
+        result.turns, result.tool_calls_count,
+        f"{result.total_tokens:,}", f"{result.input_tokens:,}", f"{result.output_tokens:,}",
+        result.duration_seconds,
+    )
 
 
-def _print_findings_summary(result: AgentResult):
+def _log_findings_summary(result: AgentResult):
     if result.findings_data:
-        print(f"  Findings extracted: {len(result.findings_data.get('findings', []))} findings")
+        logger.info("Findings extracted: %d findings", len(result.findings_data.get("findings", [])))
     else:
-        print(f"  WARNING: Could not extract findings JSON from agent output")
+        logger.error("Could not extract findings JSON from agent output")
         result.returncode = 1
 
 

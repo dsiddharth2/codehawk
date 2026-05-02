@@ -32,9 +32,12 @@ def _find_file_in_workspace(workspace: Path, file_path: str) -> "Path | None":
 
     ADO API returns paths without the repo-name prefix (e.g. 'DatalakeAPIs/Foo.cs')
     but the cloned workspace has them under 'RepoName/DatalakeAPIs/Foo.cs'.
+
+    Three-stage fallback: exact path → suffix match → filename-only match.
     """
     cleaned = file_path.lstrip("/").replace("\\", "/")
     suffix = "/" + cleaned
+    filename = cleaned.rsplit("/", 1)[-1].lower()
 
     try:
         proc = subprocess.run(
@@ -42,12 +45,25 @@ def _find_file_in_workspace(workspace: Path, file_path: str) -> "Path | None":
             encoding="utf-8", timeout=10, cwd=str(workspace),
         )
         if proc.returncode == 0:
-            for line in proc.stdout.splitlines():
+            lines = proc.stdout.splitlines()
+
+            for line in lines:
                 normalized = line.replace("\\", "/")
                 if normalized == cleaned or normalized.endswith(suffix):
                     candidate = (workspace / line).resolve()
                     if candidate.is_file():
                         return candidate
+
+            # Filename-only fallback: match by basename (single match only to avoid ambiguity)
+            basename_matches = []
+            for line in lines:
+                normalized = line.replace("\\", "/")
+                if normalized.rsplit("/", 1)[-1].lower() == filename:
+                    candidate = (workspace / line).resolve()
+                    if candidate.is_file():
+                        basename_matches.append(candidate)
+            if len(basename_matches) == 1:
+                return basename_matches[0]
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
 
