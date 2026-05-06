@@ -106,24 +106,27 @@
       "phase": 4,
       "title": "Unit tests for file_filter and smart_diff",
       "tier": "standard",
-      "status": "pending",
-      "commit": null
+      "status": "completed",
+      "commit": "060af69",
+      "notes": "Created tests/unit/test_file_filter.py (17 cases) and tests/unit/test_smart_diff.py (16 cases). All 33 pass."
     },
     {
       "id": 10,
       "phase": 4,
       "title": "Unit tests for BatchReviewJob merge logic",
       "tier": "standard",
-      "status": "pending",
-      "commit": null
+      "status": "completed",
+      "commit": "a5ac73b",
+      "notes": "Created tests/unit/test_batch_review.py (15 cases). All 15 pass."
     },
     {
       "id": "v4",
       "phase": 4,
       "title": "VERIFY: Phase 4 — Tests",
       "tier": "verify",
-      "status": "pending",
-      "commit": null
+      "status": "completed",
+      "commit": "a5ac73b",
+      "notes": "Full pytest: 184 passed, 13 skipped, 2 pre-existing failures (unchanged). New test count: +48 tests across 3 new files. Pass rate 184/186 (99%). Both failures confirmed pre-existing on main."
     }
   ]
 }
