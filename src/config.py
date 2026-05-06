@@ -105,6 +105,38 @@ class Settings(BaseSettings):
         description="Enable code-review-graph for AST-based blast-radius analysis"
     )
 
+    # Batched Review Configuration
+    skip_extensions: str = Field(
+        default=".md,.json,.yaml,.yml,.xml,.lock,.png,.jpg,.jpeg,.gif,.svg,.ico,.csproj,.sln,.config,.env,.gitignore,.dockerignore,.editorconfig,.prettierrc,.eslintignore",
+        description="Comma-separated list of file extensions to skip during review"
+    )
+    smart_diff_threshold_kb: int = Field(
+        default=30,
+        ge=1,
+        le=500,
+        description="Diff size threshold in KB above which smart summarization is used"
+    )
+    batch_size: int = Field(
+        default=25,
+        ge=5,
+        le=100,
+        description="Number of code files per review batch"
+    )
+    batch_max_turns: int = Field(
+        default=40,
+        ge=10,
+        le=100,
+        description="Maximum agent turns per batch review session"
+    )
+    max_total_findings: int = Field(
+        default=50,
+        description="Maximum total findings to post across all files"
+    )
+    max_per_file_findings: int = Field(
+        default=5,
+        description="Maximum findings to post per file"
+    )
+
     # PR Scoring Configuration (Penalty-Based: Lower is Better)
     enable_pr_scoring: bool = Field(
         default=True,

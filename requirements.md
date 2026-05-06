@@ -1,327 +1,462 @@
-# CodeHawk Agent Prompt Strategy Fix
+# Requirements: Full-Coverage Large PR Review
 
-**Date:** 2026-04-29
-**Status:** Planning
-**Triggered by:** PR #6435 test run — agent burned 1.95M tokens, never used graph tools, failed to produce findings
-
----
+## Base Branch
+`main` — branch from `origin/main`.
 
 ## Problem Statement
 
-On a real integration test against PR #6435 (165-file C# core conversion by Shyamal Agrawal), the CodeHawk agent:
-- Used ALL 40 turns reading individual files via `get_file_content` API calls
-- **NEVER called any graph tool** (`get_blast_radius`, `get_change_analysis`, `get_callers`, `get_dependents`)
-- Burned **1.95M tokens** (~$$$) without producing findings JSON
-- Hit `max_turns=40` and crashed with `RuntimeError: Agent did not produce extractable findings JSON`
+CodeHawk currently runs a single OpenAI agent session to review PRs. Large PRs (50+ files) hit multiple bottlenecks: a MAX_FILES=100 cap that truncates the file list, a 40-turn budget with system prompt advising "review top 10-15 files", 10KB diff truncation in `handle_get_file_diff`, and context window saturation. This results in incomplete reviews where many files are never examined.
 
-The graph was built successfully. The tools were registered. The agent simply ignored them.
+## 3-Layer Strategy
 
----
+### Layer 1: File Filtering
+- Skip non-code files: `.md`, `.json`, `.yaml`, `.yml`, `.xml`, `.lock`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.svg`, `.ico`, `.csproj`, `.sln`, `.config`, `.env`, `.gitignore`, `.dockerignore`, `.editorconfig`, `.prettierrc`, `.eslintignore`
+- **Keep `.css`** in the review queue
+- Configurable via `SKIP_EXTENSIONS` env var
+- Skipped files listed in summary but not reviewed
 
-## Root Cause Analysis
+### Layer 2: Smart Diffs (Summary + On-Demand)
+- Diffs under 30KB: return full diff (1 turn)
+- Diffs >= 30KB: return structured summary (hunk headers, line ranges, preview lines, stats) + agent calls `get_file_diff` with `start_line`/`end_line` to drill into specific sections (1-2 extra turns)
+- Most files have normal diffs, so turn budget impact is minimal
 
-### Bug 1: `changed_files=[]` passed empty (`review_job.py` line 86)
+### Layer 3: Batched Agent Sessions
+- After filtering, if code files exceed `batch_size` (default 25), split into batches
+- Each batch gets its own agent session with fresh context window + turn budget
+- Graph built ONCE and shared across all batches (cross-file analysis via `get_callers`/`get_blast_radius` still works)
+- Findings merged deterministically: re-sequence cr-ids, dedup by file+line+title, sum usage stats
+- Sequential execution (parallel can be added later)
 
-The runner receives `changed_files=[]`. Even though graph tool handlers read `args["changed_files"]` from the tool call arguments (not the registration-time list), the agent never calls the tools at all — so this is a secondary issue. However, if we pre-fetch PR data, we can inject the file list into the prompt so the agent doesn't need to discover it.
+## Current Bottlenecks
 
-### Bug 2: System prompt is passive about graph tools (`openai_runner.py` lines 39-45)
+| Bottleneck | Location | Current Limit | Impact |
+|-----------|----------|---------------|--------|
+| MAX_FILES cap | `review_job.py:212` | 100 files | Files 101+ omitted from prompt |
+| Turn budget | `openai_runner.py:156` | 40 turns | Agent runs out before reviewing all files |
+| Skip guidance | `openai_runner.py:44-51` | "top 10-15 files" | Agent intentionally skips files |
+| Diff truncation | `vcs_tools.py:210` | 10KB | 90%+ of large diffs invisible |
+| Tool result cap | `openai_runner.py:256` | 30KB | Tool outputs silently truncated |
+| Search truncation | `workspace_tools.py:104` | 15KB | Search results cut off |
+| Read file limit | `workspace_tools.py:148` | 500 lines | Large files truncated |
+| Findings caps | `post_findings.py:31-32` | 30 total, 5/file | Hardcoded, not configurable |
+| Graph timeout | `graph_builder.py:18-24` | 300s max | May fail for huge repos |
 
-Lines 39-42 list graph tools as "instead of" alternatives with the same weight as all other tools. Lines 44-45 add a hedge: "Graph tools are only available when the codebase graph was built successfully. If a graph tool returns an error, fall back..." This framing makes graph tools seem risky/optional.
+## Implementation Steps
 
-### Bug 3: Review prompt Step 2b says "skip for T1-T2 PRs" (`review-pr-core.md` line 113)
+### Step 1: Add config fields (`src/config.py`)
 
-The agent reads Step 2b, sees the skip condition, and apparently decides to skip graph tools entirely — even on a T5 PR.
+Add to the `Settings` class:
 
-### Bug 4: No turn budget awareness
-
-Neither the system prompt nor the review prompt tells the agent how many turns remain. The harness (`openai_runner.py`) silently exhausts turns in a loop with no intervention or deadline warning.
-
-### Bug 5: No fallback extraction
-
-When the loop ends without findings, `_extract_findings_json` runs on `raw_final_message` only. If the agent never produced JSON (because it was still reading files), there's no attempt to scan earlier messages or produce a graceful failure.
-
----
-
-## Implementation Plan
-
-### Phase 1: Fix the Data Flow (changed_files)
-
-#### Step 1 — Pre-fetch PR data in review_job.py
-
-**File:** `src/review_job.py`, method `create_findings`
-
-Before constructing `OpenAIAgentRunner`, call `FetchPRDetailsActivity` to get changed file paths. Pass these as `changed_files` to the runner.
-
-Currently line 86 passes `changed_files=[]`. Replace with actual list from PR metadata. The job already has `settings`, `pr_id`, and `repo` — instantiate `FetchPRDetailsActivity` directly (same pattern as `conftest.py` line 83) and extract `[fc.path for fc in result.file_changes]`.
-
-- **Dependencies:** None
-- **Risk:** Low — straightforward data plumbing
-- **Complexity:** Small
-
-#### Step 2 — Inject changed_files summary into the prompt
-
-**File:** `src/review_job.py`, method `_build_prompt`
-
-After building the base prompt text, append a section:
-
-```
-## Pre-fetched PR Data
-Changed files (165 files):
-- path/to/file1.cs (edit, +45/-12)
-- path/to/file2.cs (add, +200/-0)
-...
-
-Use these paths with get_change_analysis and get_blast_radius.
-Do NOT call get_pr — the data is already above.
-```
-
-This eliminates the bootstrapping problem — the agent can call `get_change_analysis` on turn 1 instead of spending turns discovering file paths.
-
-For PRs with >100 files, truncate to top 100 by line-change count and note "... and N more files".
-
-- **Dependencies:** Step 1
-- **Risk:** Medium — must not bloat prompt excessively
-
----
-
-### Phase 2: Rewrite the System Prompt
-
-#### Step 3 — Replace SYSTEM_PROMPT with graph-first mandatory strategy
-
-**File:** `src/agents/openai_runner.py`, lines 27-50
-
-Change `SYSTEM_PROMPT` from a module-level constant to a function `build_system_prompt(max_turns: int, has_graph: bool) -> str`.
-
-The new prompt must:
-- State the turn budget explicitly: "You have {max_turns} turns total. Reserve the last 3 for producing your findings JSON."
-- Make graph tools mandatory first step: "Your FIRST tool call MUST be `get_change_analysis` with the changed file list. Use its output to prioritize your review."
-- Explicitly forbid the file-by-file pattern: "Do NOT read files one-by-one sequentially. Use `get_change_analysis` to identify high-risk files, then read only those."
-- Move graph tools to the top of the tool mapping with bold emphasis
-- Add turn-budget reminder: "When you have used {max_turns - 3} turns, STOP reviewing and output your findings JSON immediately."
-
-- **Dependencies:** None
-- **Risk:** Medium — prompt engineering is empirical, may need iteration
-- **Complexity:** Medium
-
-#### Step 4 — Add conditional graph-available flag
-
-**File:** `src/agents/openai_runner.py`
-
-System prompt should adapt based on whether `graph_store is not None`. If graph is available, include mandatory graph-first instructions. If not, include a different strategy (read diffs instead of full files).
-
-Store `self.has_graph = graph_store is not None` in `__init__`. Pass to prompt builder in `run()`.
-
-- **Dependencies:** Step 3
-- **Risk:** Low
-
----
-
-### Phase 3: Rewrite the Review Prompt
-
-#### Step 5 — Make Step 2b mandatory, remove T1-T2 skip clause
-
-**File:** `commands/review-pr-core.md`, lines 101-118
-
-Rewrite Step 2b:
-- Remove "For T1-T2 PRs: skip this step"
-- Change heading to "Step 2b — Analyze Change Impact (MANDATORY when graph tools available)"
-- Add: "This step is REQUIRED for all PRs where graph tools are available."
-- Add explicit instruction: "Call `get_change_analysis` with the changed file paths listed in the PR Data section above."
-- Add: "From the response, create a ranked review plan: review files with `risk_score > 0.5` first, then files with `test_gaps`, then remaining files in priority order."
-
-- **Dependencies:** None (parallel with Phase 2)
-- **Risk:** Low
-
-#### Step 6 — Restructure Step 5 to be graph-driven for large PRs
-
-**File:** `commands/review-pr-core.md`, Step 5 section
-
-Add preamble:
-```
-### Review Strategy by Tier
-- T1-T2 (1-10 files): Read each file. Graph analysis is helpful but optional.
-- T3 (11-25 files): Use get_change_analysis priorities. Read top 15 files. Skim rest via diffs.
-- T4 (26-50 files): Use get_change_analysis priorities. Read top 10 high-risk files. Use get_file_diff for remaining. Do NOT read full file content for low-risk files.
-- T5 (51+ files): Use get_change_analysis priorities. Read top 8 high-risk files. Use get_blast_radius to identify cascading risks. Use diffs only for the rest.
-
-BUDGET RULE: You must finish all file reading by turn {max_turns - 5}. Turns after that are for writing findings JSON.
+```python
+# Large PR handling
+skip_extensions: str = Field(
+    default=".md,.json,.yaml,.yml,.xml,.lock,.png,.jpg,.jpeg,.gif,.svg,.ico,.csproj,.sln,.config,.env,.gitignore,.dockerignore,.editorconfig,.prettierrc,.eslintignore",
+    description="Comma-separated file extensions to skip during review (non-code files)"
+)
+smart_diff_threshold_kb: int = Field(
+    default=30,
+    ge=1,
+    le=500,
+    description="Diff size in KB above which smart summaries are returned instead of full text"
+)
+batch_size: int = Field(
+    default=25,
+    ge=5,
+    le=100,
+    description="Max code files per agent batch. Files beyond this trigger multi-batch review."
+)
+batch_max_turns: int = Field(
+    default=40,
+    ge=10,
+    le=100,
+    description="Max turns per batch agent session"
+)
 ```
 
-- **Dependencies:** Step 5
-- **Risk:** Medium
+### Step 2: Create file filter module (`src/file_filter.py`)
 
-#### Step 7 — Add turn-budget deadline to Step 7
+**New file** with two functions:
 
-**File:** `commands/review-pr-core.md`, Step 7
+```python
+from pathlib import Path
+from typing import TYPE_CHECKING
 
-Add at the top:
-```
-**CRITICAL: If you are on turn 35+ (of 40), STOP reading files and produce findings NOW.
-Partial findings are infinitely better than no findings. Output what you have.**
-```
+if TYPE_CHECKING:
+    from models.review_models import FileChange
 
-- **Dependencies:** None
-- **Risk:** Low
 
----
+def parse_skip_extensions(skip_extensions_csv: str) -> set[str]:
+    """Parse comma-separated extensions into a normalized set (lowercase, with leading dot)."""
+    exts = set()
+    for ext in skip_extensions_csv.split(","):
+        ext = ext.strip().lower()
+        if ext and not ext.startswith("."):
+            ext = "." + ext
+        if ext:
+            exts.add(ext)
+    return exts
 
-### Phase 4: Turn Budget Enforcement in Harness
 
-#### Step 8 — Add deadline injection at turn N-3
+def filter_changed_files(
+    file_changes: list["FileChange"],
+    skip_extensions: set[str],
+) -> tuple[list["FileChange"], list["FileChange"]]:
+    """Split file_changes into (code_files, skipped_files).
 
-**File:** `src/agents/openai_runner.py`, both `_run_chat_completions` and `_run_responses` methods
-
-Inside the turn loop, when `turn == max_turns - 3`, inject a message before the next API call:
-```
-DEADLINE: You have 3 turns remaining. You MUST output your findings JSON NOW as your next message.
-Do not make any more tool calls. Produce the ```json findings block immediately with whatever
-findings you have collected so far. Partial output is required — do NOT skip this.
-```
-
-For Chat Completions API: append `{"role": "user", "content": deadline_msg}` to `messages`.
-For Responses API: append a user message to `input_items`.
-
-This is a **hard backstop** that works regardless of whether the agent follows prompt instructions.
-
-- **Dependencies:** None
-- **Risk:** Low
-- **Complexity:** Small
-
-#### Step 9 — Add turn-count reporting in tool results
-
-**File:** `src/agents/openai_runner.py`
-
-After each tool result, append:
-```
-\n[Turn {turn+1}/{max_turns} used. {remaining} remaining.]
+    Deleted files (change_type='delete') are always skipped since there's
+    nothing to review in the new code.
+    """
+    code_files = []
+    skipped = []
+    for fc in file_changes:
+        ext = Path(fc.path).suffix.lower()
+        if ext in skip_extensions or fc.change_type == "delete":
+            skipped.append(fc)
+        else:
+            code_files.append(fc)
+    return code_files, skipped
 ```
 
-This goes into the tool result content so the agent sees its budget continuously without relying on remembering the initial instruction.
+### Step 3: Integrate filtering into ReviewJob (`src/review_job.py`)
 
-Add in both the chat completions loop (after line 208) and responses loop (after line 315).
+**Modify `create_findings()`** — insert filtering between PR pre-fetch (line 79) and prompt build (line 84):
 
-- **Dependencies:** None
-- **Risk:** Low — adds ~50 chars per tool response
-- **Complexity:** Trivial
-
----
-
-### Phase 5: Fallback Extraction
-
-#### Step 10 — Scan conversation history for partial findings
-
-**File:** `src/agents/openai_runner.py`
-
-When `result.findings_data is None` after `_extract_findings_json`, scan the full conversation history for any JSON blocks containing `"findings"` or `"cr-"` patterns.
-
-- For chat completions: scan all messages with `role == "assistant"` that have content
-- For responses: accumulate all assistant text outputs during the loop
-- Try `_extract_findings_json` on each candidate
-- Use the largest/last match if found
-
-- **Dependencies:** None
-- **Risk:** Low
-- **Complexity:** Small
-
-#### Step 11 — Synthesize emergency empty findings on total failure
-
-**File:** `src/agents/openai_runner.py`
-
-As a last resort, construct a minimal valid findings.json:
-```json
-{
-  "pr_id": <pr_id>,
-  "repo": "<repo>",
-  "vcs": "ado",
-  "review_modes": ["standard"],
-  "findings": [],
-  "fix_verifications": [],
-  "error": "Agent exhausted turn budget without producing findings"
-}
+```python
+# After changed_files = pr_details.file_changes
+from file_filter import filter_changed_files, parse_skip_extensions
+skip_exts = parse_skip_extensions(self.settings.skip_extensions)
+code_files, skipped_files = filter_changed_files(changed_files, skip_exts)
+if skipped_files:
+    logger.info("Filtered %d non-code files (kept %d code files)", len(skipped_files), len(code_files))
+changed_files = code_files
 ```
 
-This prevents the `RuntimeError` on `review_job.py` line 92 and lets Phase 2 report the failure gracefully.
+**Modify `_build_changed_files_section()`** — remove `MAX_FILES = 100` cap entirely (lines 212-237). Show all files in the table. Add skipped files summary.
 
-Store `pr_id` and `repo` on the runner instance (already available from `__init__` args).
+**Add batch mode support** — add optional fields to `ReviewJobConfig`:
+```python
+batch_index: Optional[int] = None
+batch_total: Optional[int] = None
+file_subset: Optional[list] = None
+pre_built_graph: Optional[Any] = None
+```
 
-- **Dependencies:** None
-- **Risk:** Low
+When `file_subset` is set, skip PR pre-fetch and use subset directly. When `pre_built_graph` is set, skip `build_graph()`. When `batch_index` is set, append batch context to prompt.
 
----
+### Step 4: Create smart diff module (`src/smart_diff.py`)
 
-### Phase 6: Test Updates
+**New file** with diff summarization:
 
-#### Step 12 — Unit test for deadline injection
+```python
+import re
+from dataclasses import dataclass
 
-**File:** New `tests/unit/test_turn_budget.py`
 
-Mock the OpenAI client, simulate a loop reaching turn 37 of 40, verify the deadline message appears in the messages list.
+@dataclass
+class DiffSummary:
+    file_path: str
+    total_size_bytes: int
+    hunks: list[dict]  # [{header, start_line, end_line, added, removed, context, preview_lines}]
+    is_summarized: bool
 
-#### Step 13 — Unit test for changed_files propagation
 
-**File:** New or extend `tests/unit/test_review_job.py`
+def summarize_diff(diff_text: str, file_path: str, threshold_kb: int = 30) -> DiffSummary:
+    """If diff exceeds threshold, return structured summary with hunk details."""
+    size_bytes = len(diff_text.encode("utf-8"))
+    if size_bytes < threshold_kb * 1024:
+        return DiffSummary(file_path=file_path, total_size_bytes=size_bytes, hunks=[], is_summarized=False)
 
-Mock `FetchPRDetailsActivity` and `OpenAIAgentRunner`. Verify `create_findings` fetches PR data and passes the file list to the runner.
+    hunks = []
+    current_hunk = None
 
-#### Step 14 — Integration test cost control
+    for line in diff_text.split("\n"):
+        match = re.match(r'@@ -(\d+),?(\d*) \+(\d+),?(\d*) @@(.*)', line)
+        if match:
+            if current_hunk:
+                hunks.append(current_hunk)
+            current_hunk = {
+                "header": line,
+                "start_line": int(match.group(3)),
+                "end_line": int(match.group(3)) + int(match.group(4) or 1),
+                "context": match.group(5).strip(),
+                "added": 0,
+                "removed": 0,
+                "preview_lines": [],
+            }
+        elif current_hunk:
+            if line.startswith("+"):
+                current_hunk["added"] += 1
+                if len(current_hunk["preview_lines"]) < 3:
+                    current_hunk["preview_lines"].append(line[:120])
+            elif line.startswith("-"):
+                current_hunk["removed"] += 1
 
-**File:** `tests/integration/conftest.py`
+    if current_hunk:
+        hunks.append(current_hunk)
 
-Add `MAX_TURNS_INTEGRATION = 15` constant. The current 40 turns at ~$50/run is wasteful for testing.
+    return DiffSummary(file_path=file_path, total_size_bytes=size_bytes, hunks=hunks, is_summarized=True)
 
----
 
-## File-Level Change Summary
+def format_summary_for_agent(summary: DiffSummary) -> str:
+    """Format a DiffSummary as text the agent can read."""
+    lines = [
+        f"LARGE DIFF SUMMARY for {summary.file_path} ({summary.total_size_bytes:,} bytes)",
+        f"This diff exceeds the size threshold. {len(summary.hunks)} hunks found.",
+        "Call get_file_diff with start_line and end_line to drill into specific sections.",
+        "",
+        "Hunks:",
+    ]
+    for i, hunk in enumerate(summary.hunks, 1):
+        lines.append(
+            f"  [{i}] Lines {hunk['start_line']}-{hunk['end_line']} "
+            f"(+{hunk['added']}/-{hunk['removed']}) {hunk.get('context', '')}"
+        )
+        for preview in hunk.get("preview_lines", []):
+            lines.append(f"      {preview}")
+    return "\n".join(lines)
+```
 
-| File | Lines Affected | Change Type |
-|------|---------------|-------------|
-| `src/agents/openai_runner.py` L27-50 | SYSTEM_PROMPT | Rewrite to function, graph-first, budget-aware |
-| `src/agents/openai_runner.py` L135-215 | Chat completions loop | Deadline injection at N-3, turn counter in tool results |
-| `src/agents/openai_runner.py` L235-318 | Responses loop | Same deadline injection + turn counter |
-| `src/agents/openai_runner.py` L213,320 | After extraction | Conversation-history fallback scanning |
-| `src/review_job.py` L65-87 | `create_findings` | Fetch PR data first, extract changed_files |
-| `src/review_job.py` L136-148 | `_build_prompt` | Inject changed_files summary into prompt |
-| `commands/review-pr-core.md` L101-118 | Step 2b | Make mandatory, remove T1-T2 skip |
-| `commands/review-pr-core.md` L164-175 | Step 5 preamble | Graph-driven review strategy by tier |
-| `commands/review-pr-core.md` L337-339 | Step 7 top | Turn-budget deadline warning |
-| `tests/integration/conftest.py` | Constants | Add MAX_TURNS_INTEGRATION |
+### Step 5: Modify get_file_diff for smart diffs + drill-in (`src/tools/vcs_tools.py`)
 
----
+**Modify `handle_get_file_diff`** (line 199):
 
-## Implementation Order
+1. Remove hardcoded `[:10000]` truncation (line 210)
+2. Add smart diff logic: if diff > threshold, return summary via `summarize_diff()`
+3. Add drill-in support: when `start_line`/`end_line` provided, extract only relevant hunks
 
-Steps can be parallelized:
-- **Parallel track A:** Steps 1 → 2 (data flow)
-- **Parallel track B:** Steps 3 → 4 (system prompt)
-- **Parallel track C:** Steps 5 → 6 → 7 (review prompt)
-- **Parallel track D:** Steps 8 → 9 (harness enforcement)
-- **Parallel track E:** Steps 10 → 11 (fallback)
-- **After all above:** Steps 12 → 13 → 14 (tests)
+**Update tool schema** — add optional parameters:
+```python
+"start_line": {
+    "type": "integer",
+    "description": "Start line to drill into a specific section (optional, use with end_line)"
+},
+"end_line": {
+    "type": "integer",
+    "description": "End line to drill into a specific section (optional, use with start_line)"
+},
+```
 
-**Single developer order:** 1 → 2 → 3 → 4 → 8 → 9 → 5 → 6 → 7 → 10 → 11 → 12 → 13 → 14
+**Modified handler logic**:
+```python
+def handle_get_file_diff(args: dict) -> str:
+    result = diff_activity.execute(...)
 
-This front-loads the highest-impact fixes (data flow + system prompt + deadline injection) so they can be tested together before polishing the review prompt.
+    start_line = args.get("start_line")
+    end_line = args.get("end_line")
 
----
+    if start_line and end_line:
+        # Drill-in mode: extract hunks in range
+        filtered = _extract_hunks_in_range(result.diff_text, start_line, end_line)
+        return json.dumps({"file_path": result.file_path, "diff_text": filtered[:30000], "drill_in": True})
+
+    # Full mode: check if smart summary needed
+    summary = summarize_diff(result.diff_text, result.file_path, threshold_kb)
+    if summary.is_summarized:
+        return json.dumps({
+            "file_path": result.file_path,
+            "summary": format_summary_for_agent(summary),
+            "is_summary": True,
+            "hint": "Call get_file_diff with start_line/end_line to drill into specific hunks.",
+        })
+
+    # Normal: return full diff (raised from 10KB to 30KB safety cap)
+    return json.dumps({
+        "file_path": result.file_path,
+        "diff_text": result.diff_text[:30000],
+        ...
+    })
+```
+
+### Step 6: Update system prompt (`src/agents/openai_runner.py`)
+
+**Modify `build_system_prompt()`** (lines 30-89):
+
+- Remove: `"For large PRs (50+ files): review top 10-15 files by change volume using diffs, not full reads."` (appears in both graph and no-graph sections)
+- Add:
+  ```
+  - Review ALL files in your assigned batch — do not skip files. The orchestrator has already
+    filtered non-code files and split the PR into manageable batches.
+  - When get_file_diff returns is_summary=true, the diff was too large to return in full.
+    Read the hunk summary to identify high-risk sections, then call get_file_diff again with
+    start_line and end_line to drill into those sections.
+  ```
+- Raise tool result cap from 30KB to 50KB (line 256, line 395)
+
+### Step 7: Raise other truncation limits
+
+- `src/tools/workspace_tools.py:104` — search_code: 15KB to 25KB
+- `src/tools/workspace_tools.py:148` — read_local_file: 500 to 1000 lines default
+- `src/agents/openai_runner.py:256,395` — tool result cap: 30KB to 50KB
+
+### Step 8: Create BatchReviewJob (`src/batch_review_job.py`)
+
+**New file** — the core orchestrator:
+
+```python
+class BatchReviewJob:
+    """Orchestrates large PR reviews by filtering, batching, and merging."""
+
+    def __init__(self, pr_id, repo, workspace, model, prompt_path, vcs, settings):
+        ...
+
+    def run(self, dry_run=False, commit_id="") -> dict:
+        # 1. Pre-fetch PR data (once)
+        # 2. Filter non-code files
+        # 3. Build graph once (shared across batches)
+        # 4. If code files <= batch_size: delegate to ReviewJob (single session)
+        # 5. Split into batches (round-robin by churn for balance)
+        # 6. Run each batch sequentially via ReviewJob
+        # 7. Merge findings (re-sequence cr-ids, dedup, sum usage)
+        # 8. Publish results (Phase 2)
+
+    def _split_into_batches(self, code_files, batch_size):
+        """Round-robin by churn descending to balance workload across batches."""
+        sorted_files = sorted(code_files, key=lambda fc: fc.additions + fc.deletions, reverse=True)
+        num_batches = ceil(len(sorted_files) / batch_size)
+        batches = [[] for _ in range(num_batches)]
+        for i, fc in enumerate(sorted_files):
+            batches[i % num_batches].append(fc)
+        return batches
+
+    def _run_batch(self, batch_files, batch_index, batch_total, graph_store):
+        """Run single batch via ReviewJob with file_subset and pre_built_graph."""
+        config = ReviewJobConfig(
+            ...,
+            batch_index=batch_index,
+            batch_total=batch_total,
+            file_subset=batch_files,
+            pre_built_graph=graph_store,
+        )
+        job = ReviewJob(config, self.settings)
+        job.create_findings()
+        return job  # extract findings from written file
+
+    def _merge_results(self, batch_results):
+        """Merge findings from all batches."""
+        # 1. Concatenate all findings
+        # 2. Dedup by (file, line, title)
+        # 3. Re-sequence cr-ids: cr-001, cr-002, ...
+        # 4. Sum usage: input_tokens, output_tokens, duration
+        # 5. Collect batch errors (if any batch failed)
+        # 6. Return unified findings dict
+```
+
+**Key design decisions**:
+- Graph built once, shared via `pre_built_graph` — cross-file analysis still works
+- Round-robin splitting ensures high-churn files distributed evenly across batches
+- Failed batches don't crash pipeline — other batch findings preserved
+- Single-session shortcut for small PRs (< batch_size) — backward compatible
+
+### Step 9: Update run_agent.py entry point
+
+**Modify `main()`** to use `BatchReviewJob` instead of `ReviewJob`:
+
+```python
+from batch_review_job import BatchReviewJob
+
+batch_job = BatchReviewJob(
+    pr_id=args.pr_id,
+    repo=args.repo,
+    workspace=Path(args.workspace),
+    model=args.model,
+    prompt_path=Path(args.prompt_file),
+    vcs="ado",
+)
+output = batch_job.run(dry_run=args.dry_run, commit_id=args.commit_id)
+```
+
+BatchReviewJob delegates to single-session ReviewJob for small PRs, so this is backward compatible.
+
+### Step 10: Update review prompt (`commands/review-pr-core.md`)
+
+- Update Step 4 (T4/T5 tiers): remove "focus on highest-risk paths only", replace with "Review ALL files in your batch"
+- Add note: "Non-code files have been pre-filtered. You will only see code files."
+- Add smart diff instructions: "When get_file_diff returns is_summary, drill into suspicious hunks with start_line/end_line"
+
+### Step 11: Update post_findings.py caps
+
+- Replace hardcoded `MAX_TOTAL_FINDINGS = 30` with `settings.max_total_findings` (default 50)
+- Replace hardcoded `MAX_PER_FILE = 5` with `settings.max_per_file_findings` (default 5)
+
+### Step 12: Increase graph timeout (`src/graph_builder.py`)
+
+- T5 timeout: 300s to 600s for very large PRs
+
+## Build Order
+
+```
+Phase 1 (parallel — no dependencies):
+  Step 1: config.py
+  Step 2: file_filter.py
+  Step 4: smart_diff.py
+
+Phase 2 (depends on Phase 1):
+  Step 3: review_job.py (filtering + batch mode)
+  Step 5: vcs_tools.py (smart diff integration)
+  Step 6: openai_runner.py (prompt update)
+  Step 7: workspace_tools.py (raise limits)
+  Step 12: graph_builder.py (timeout increase)
+
+Phase 3 (depends on Phase 2):
+  Step 8: batch_review_job.py
+  Step 9: run_agent.py
+  Step 10: review-pr-core.md
+  Step 11: post_findings.py
+```
+
+Each phase is independently mergeable and improves the system incrementally.
+
+## Edge Cases
+
+| Scenario | Handling |
+|----------|----------|
+| Graph build fails | Proceed without graph — each batch runs in diff-only mode |
+| Single batch crashes | Catch exception, log error, merge findings from successful batches |
+| All files filtered | Write clean findings.json with review_modes=["docs_chore"], zero findings |
+| Batch has 1 file | Fine — ReviewJob handles single files normally |
+| PR has 500+ files | Creates ~20 batches. Sequential execution. Future: parallelize with asyncio |
+| Drill-in range matches no hunks | Return empty diff with helpful message |
+| Duplicate findings across batches | Dedup by (file, line, title) in merge step |
+| review_modes differ across batches | Union all detected modes |
+
+## New Config/Env Vars
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `SKIP_EXTENSIONS` | str | `.md,.json,.yaml,.yml,.xml,.lock,.png,.jpg,.jpeg,.gif,.svg,.ico,.csproj,.sln,.config,.env,.gitignore,.dockerignore,.editorconfig,.prettierrc,.eslintignore` | Extensions to filter out |
+| `SMART_DIFF_THRESHOLD_KB` | int | `30` | Diff size (KB) above which summary is returned |
+| `BATCH_SIZE` | int | `25` | Max code files per agent batch |
+| `BATCH_MAX_TURNS` | int | `40` | Max turns per batch agent session |
+
+## Testing Strategy
+
+### Unit Tests
+
+| Test File | Tests |
+|-----------|-------|
+| `tests/unit/test_file_filter.py` | parse_skip_extensions, filter keeps .py/.cs/.ts/.css, skips .md/.json/.yaml/.lock/.png, skips deleted files, empty list, all skipped |
+| `tests/unit/test_smart_diff.py` | small diff unsummarized, large diff returns hunks, hunk counts correct, drill-in extraction, empty diff, binary diff, format readable |
+| `tests/unit/test_batch_merge.py` | cr-id re-sequencing, dedup by file+line+title, usage sum, failed batch handling, round-robin split, single-batch shortcut |
+
+### Integration Tests
+
+| Test | Description |
+|------|-------------|
+| `test_batch_pipeline_large_pr` | Real PR with 30+ files: verify multi-batch, all files covered, sequential cr-ids, no duplicates, usage summed |
+| `test_batch_pipeline_small_pr` | Small PR: verify single-session path, backward compatible |
 
 ## Success Criteria
 
-- [ ] On a T5 PR (50+ files), agent calls `get_change_analysis` within its first 2 turns
-- [ ] Agent reads fewer than 20 files via `get_file_content` on a 165-file PR (was 40+)
-- [ ] Agent produces valid findings JSON within the turn budget (no more RuntimeError)
-- [ ] Total token usage on PR #6435 drops below 800K (from 1.95M)
-- [ ] Deadline injection fires at turn N-3 and agent complies
-- [ ] Fallback extraction recovers partial findings when agent fails to produce final JSON
-- [ ] `changed_files` parameter is non-empty when `graph_store` is available
-- [ ] All existing unit tests continue to pass
-
----
-
-## Risks and Mitigations
-
-| Risk | Mitigation |
-|------|-----------|
-| Prompt changes don't change agent behavior (LLMs are unpredictable) | Harness-level deadline injection (Step 8) is a hard backstop. Fallback extraction (Steps 10-11) ensures pipeline never crashes. |
-| Pre-fetching PR data adds an extra API call | One ADO API call (~200ms). Saves 1 turn + ~$0.50 in tokens. Net positive. |
-| Injecting changed_files bloats prompt for very large PRs | Truncate to top 100 files by line-change count for T5+ PRs. |
-| Turn counter in tool results adds noise | Single line at end of each result. Models handle this gracefully. |
+- [ ] Non-code files (.md, .json, .yaml, .lock, images) are never shown to the agent
+- [ ] `.css` files are kept (not filtered)
+- [ ] Diffs under 30KB are returned in full (no 10KB truncation)
+- [ ] Diffs over 30KB return a structured summary with hunk list
+- [ ] Agent can drill into specific hunk ranges via start_line/end_line
+- [ ] PRs with >25 code files are split into batches
+- [ ] Each batch runs as an independent ReviewJob with shared graph
+- [ ] Merged findings have sequential cr-ids (cr-001, cr-002, ...)
+- [ ] Duplicate findings across batches are removed
+- [ ] Token usage is summed across all batches
+- [ ] Failed batches do not crash the pipeline
+- [ ] Small PRs (<25 code files) follow the same path as today
+- [ ] All new code has unit tests

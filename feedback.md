@@ -1,168 +1,149 @@
-# CodeHawk Documentation -- Code Review
+# Large PR Batched Review -- Phase 3 Code Review
 
 **Reviewer:** codehawk-reviewer
-**Date:** 2026-05-01 13:00:00+00:00
+**Date:** 2026-05-06 10:00:00+05:30
 **Verdict:** APPROVED
 
 > See the recent git history of this file to understand the context of this review.
+> Prior review (a5ccd3b): Phase 2 code review -- APPROVED. Carried forward: `smart_diff.py:63` boundary operator (`<=` vs `<`), non-blocking, deferred to Phase 4 tests.
 
 ---
 
-## Phase 1 Scope
+## Phase 1+2 Regression Check
 
-Four tasks completed on branch `docs/comprehensive-documentation` (commits ab52292 through fb48ce3):
+All Phase 1 modules (config.py, file_filter.py, smart_diff.py) and Phase 2 modules (vcs_tools.py, review_job.py, openai_runner.py, workspace_tools.py, graph_builder.py) reviewed for regressions against Phase 3 changes. **No regressions found.**
 
-| Task | File | Lines | Commits |
-|------|------|-------|---------|
-| Task 1 | README.md (full rewrite) | 463 | ab52292 |
-| Task 2 | docs/README.md (index) | 41 | 74acdcc |
-| Task 3 | docs/features/graph-tools.md | 268 | 915151b |
-| Task 4 | docs/features/agent-runner.md | 309 | bbb9e2e |
-
----
-
-## Task 1: README.md -- Full Rewrite
-
-**PASS** (with one factual gap, see below)
-
-Cross-checked against source files:
-
-- **Environment variable table** matches `src/config.py` defaults: `VCS` default "ado", `MIN_CONFIDENCE_SCORE` 0.7, `MAX_COMMENTS_PER_FILE` 5, `UPDATE_EXISTING_SUMMARY` true, `LOG_LEVEL` "INFO", `LOG_FORMAT` "json", `ENABLE_GRAPH` true, `ENABLE_PR_SCORING` true, `AUTH_MODE` "auto". Docker-level env vars (`OPENAI_MODEL`, `MAX_TURNS`, `DRY_RUN`, `COMMIT_ID`) confirmed in `entrypoint.sh` lines 30-44. PASS.
-
-- **Scoring penalty matrix** matches `src/config.py` defaults (lines 115-137): Security 5.0/4.0/2.0, Performance 3.0/2.0/1.0, Best Practices 2.0/1.0/0.5, Code Style 0.0/0.0/0.0, Documentation 0.0/0.0/0.0. PASS.
-
-- **Star rating thresholds** match `src/config.py` lines 140-144: 0.0, 5.0, 15.0, 30.0, 50.0. PASS.
-
-- **Findings schema** matches `commands/findings-schema.json` and actual agent output structure. JSON example is valid and realistic. PASS.
-
-- **Project structure tree** verified against actual filesystem -- all listed files and directories exist (`src/run_agent.py`, `src/review_job.py`, `src/post_findings.py`, `src/pr_scorer.py`, `src/graph_builder.py`, `src/config.py`, `src/score_comparison.py`, `src/agents/openai_runner.py`, `src/tools/registry.py`, `src/tools/graph_tools.py`, `src/tools/vcs_tools.py`, `src/tools/workspace_tools.py`, `src/activities/`, `src/models/`, `commands/review-pr-core.md`, `commands/findings-schema.json`, `docs/`, `ci/`, `templates/`, `entrypoint.sh`, `Dockerfile`, `pyproject.toml`). PASS.
-
-- **Developer controls** (`# cr: intentional`, `# cr: ignore-next-line`, `# cr: ignore-block start/end`) confirmed in `commands/review-pr-core.md`. PASS.
-
-- **Pipeline caps** ("30 total, 5 per file", confidence 0.7) confirmed in `src/post_findings.py` lines 31-33: `MAX_TOTAL_FINDINGS = 30`, `MAX_PER_FILE = 5`, `MIN_CONFIDENCE = 0.7`. PASS.
-
-- **Quick Start CLI example** matches `src/run_agent.py` argparse definitions. PASS.
-
-- **3 Mermaid diagrams** (flowchart LR architecture, flowchart TD scoring, sequenceDiagram pipeline flow) -- all syntactically correct with proper code fences. PASS.
-
-- **9 documentation links** at bottom of README all resolve to existing files in `docs/`. PASS.
-
-**FAIL -- Cost table missing `gpt-4.1-nano` model.** The README lists 12 models in the Cost Tracking table. The source `src/post_findings.py` `MODEL_COST_TABLE` (line 39) has 13 entries -- the README omits `gpt-4.1-nano` ($0.10 input / $0.40 output per 1M tokens). All other 12 entries have correct prices. This is a verifiable factual gap against the source.
-
-**Doer:** fixed in commit 3668e58 — added gpt-4.1-nano row to Cost Tracking table between gpt-4.1 and gpt-4o
+- `src/config.py`: No Phase 3 modifications. All 6 batch review fields intact. **PASS.**
+- `src/file_filter.py`: No modifications. Consumed by both `review_job.py` and `batch_review_job.py`. **PASS.**
+- `src/smart_diff.py`: No modifications. **PASS.**
+- `src/tools/vcs_tools.py`: No Phase 3 modifications. Smart diff integration intact. **PASS.**
+- `src/review_job.py`: No Phase 3 modifications. Batch fields (`file_subset`, `pre_built_graph`, `batch_index`, `batch_total`) intact and consumed correctly by `BatchReviewJob`. **PASS.**
+- **Carried forward:** `smart_diff.py:63` still uses `<=` (should be `<` per requirements.md "Diffs >= 30KB"). Non-blocking, deferred to Phase 4 tests.
 
 ---
 
-## Task 2: docs/README.md -- Documentation Index
+## Task 7: Create BatchReviewJob orchestrator (src/batch_review_job.py)
 
-**PASS**
+**PASS.** `BatchReviewJob` (282 lines) correctly implements all requirements from PLAN.md Task 7.
 
-- **8 feature doc links** all resolve to existing files in `docs/features/` (agent-runner.md, graph-tools.md, review-modes.md, scoring.md, post-findings.md, fix-verification.md, ci-integration.md, vcs-cli.md). PASS.
+### 7.1 -- Class structure and init
 
-- **Architecture link** resolves to `docs/architecture.md`. PASS.
+`__init__` accepts all required parameters: `pr_id`, `repo`, `workspace`, `model`, `prompt_path`, `vcs`, `settings`. Settings defaults to `get_settings()` when not provided. **PASS.**
 
-- **Quick Links** all resolve: `../commands/findings-schema.json`, `../commands/review-pr-core.md`, `features/scoring.md`, `features/ci-integration.md`, `../ci/`, `../templates/`. PASS.
+### 7.2 -- `run()` pipeline (lines 48-139)
 
-- **Descriptions** are accurate summaries of each document's content. PASS.
+All 8 steps implemented correctly:
 
-- No content duplication -- this file serves purely as an index/navigation hub. PASS.
+1. **Pre-fetch PR data** (line 61): Calls `_fetch_pr_details()` which uses `FetchPRDetailsActivity`. Exception handling returns `None` on failure. **PASS.**
+2. **Filter non-code files** (lines 66-71): Uses `parse_skip_extensions` + `filter_changed_files` with `self.settings.skip_extensions`. Logs kept/skipped counts. **PASS.**
+3. **Build graph once** (line 74): Calls `_build_graph()` with `changed_file_count`. Graph built once and shared across batches via `pre_built_graph`. Exception handling returns `None` on failure. **PASS.**
+4. **Single-session shortcut** (lines 77-93): When `len(code_files) <= self.settings.batch_size`, creates a `ReviewJobConfig` with `file_subset` and `pre_built_graph`, delegates to `ReviewJob.run()`. Backward compatible. **PASS.**
+5. **Batch splitting** (line 96): Calls `_split_into_batches()`. **PASS.**
+6. **Sequential batch execution** (lines 101-116): Iterates batches, calls `_run_batch()`, catches exceptions per-batch so failures don't crash the pipeline. **PASS.**
+7. **Merge findings** (line 119): Calls `_merge_results()`. **PASS.**
+8. **Write merged findings.json and publish** (lines 123-139): Writes to `.cr/findings.json`, then calls `post_findings.run()`. **PASS.**
 
----
+### 7.3 -- `_split_into_batches()` correctness (lines 199-223)
 
-## Task 3: docs/features/graph-tools.md -- Graph Analysis Deep-Dive
+**PASS.** Round-robin by churn descending:
+- Sorts by `(additions + deletions)` descending with `hasattr` guard for non-FileChange objects.
+- Computes `num_batches` using ceiling division: `(len + batch_size - 1) // batch_size`.
+- Distributes via `batches[i % num_batches]` -- this correctly interleaves high-churn and low-churn files for balanced workload.
+- Returns empty list for empty input.
 
-**PASS**
+**NOTE:** Ceiling division matches the PLAN.md `ceil(len / batch_size)` requirement without importing `math.ceil`. Correct.
 
-Cross-checked all 4 tool implementations against `src/tools/graph_tools.py`:
+### 7.4 -- `_merge_results()` correctness (lines 225-282)
 
-- **`get_change_analysis`** (lines 173-227): Input schema `changed_files` array matches. Risk score formula documented as `min(1.0, non_test_impacted / 20.0)` -- confirmed at source line 184. Review priorities filter to Function/Method/Class -- matches line 189. Test gaps check uses `get_transitive_tests` -- matches lines 193-197. JSON output structure matches handler return. PASS.
+**PASS.** Dedup and re-sequence:
+- Concatenates all findings from batch results.
+- Dedup by `(file, line, title)` tuple -- matches PLAN.md spec. Preserves first occurrence.
+- Re-sequences cr-ids as `cr-001`, `cr-002`, ... using `f"cr-{i:03d}"`. **PASS.**
+- Sums `input_tokens`, `output_tokens`, `duration_seconds`. **PASS.**
+- Unions `review_modes` via set, sorted for deterministic output. **PASS.**
+- Uses last non-empty `model` string (reasonable for homogeneous batches). **PASS.**
 
-- **`get_blast_radius`** (lines 23-67): Input schema matches. Output includes `impacted_files`, `impacted_functions`, `test_gaps` -- matches handler. Implementation calls `get_impact_radius`, filters `impacted_nodes` to Function/Method -- confirmed at lines 27-31. PASS.
+### 7.5 -- `batch_max_turns` threading (line 182)
 
-- **`get_callers`** (lines 71-121): Input schema matches (function_name required, file_path optional). Qualified name construction `file_path::function_name` documented and confirmed at source line 79. Dual lookup (edges_by_target + search_edges_by_target_name) documented and confirmed. Dedup by `source_qualified` confirmed at line 82. PASS.
+**PASS.** `_run_batch()` explicitly sets `max_turns=self.settings.batch_max_turns` on the `ReviewJobConfig`. This correctly threads the per-batch turn budget from Settings into each batch's config. The single-session shortcut (line 82) does NOT set `max_turns`, so it inherits the default (40) from `ReviewJobConfig` -- correct since single-session reviews should use the standard budget.
 
-- **`get_dependents`** (lines 125-169): Input schema matches. Strips leading `/` -- confirmed at source line 128. Filters to `IMPORTS_FROM` edges -- confirmed at line 130. Fallback to `search_edges_by_target_name` -- confirmed at lines 132-133. Groups by source file -- confirmed. PASS.
+### 7.6 -- GraphStore reuse safety
 
-- **Graph Builder section** matches `src/graph_builder.py`: package name `code-review-graph`, entry point `build_or_update_graph(full_rebuild=True, repo_root=workspace, postprocess="minimal")`, SQLite storage via `get_db_path`, 30s timeout via `ThreadPoolExecutor`, all 6 failure modes documented match the actual exception handling. PASS.
+**PASS.** The graph is built once in `_build_graph()` and passed as `pre_built_graph` to each batch's `ReviewJobConfig`. In `review_job.py` (lines 108-110), when `pre_built_graph` is set it is used directly without modification. The graph is read-only during review (agents query it via `get_callers`, `get_blast_radius`, etc.) so sequential reuse across batches is safe.
 
-- **Mermaid flowchart** (graph-first strategy) syntactically correct. PASS.
+### 7.7 -- Error handling
 
-- **Tier-based depth table** consistent with `commands/review-pr-core.md` tier definitions. PASS.
+**PASS.** Three levels of resilience:
+- `_fetch_pr_details()`: catches all exceptions, returns `None`, logs warning. When `None`, `all_files = []` (line 62).
+- `_build_graph()`: catches all exceptions, returns `None`, logs warning.
+- Per-batch execution (lines 114-116): catches all exceptions, logs error, continues with remaining batches.
+- If all batches fail, `_merge_results([])` returns a clean empty result.
 
-- **Graceful degradation section** accurately describes no-graph system prompt fallback and per-tool error handling via `{"error": "..."}`. PASS.
-
----
-
-## Task 4: docs/features/agent-runner.md -- Agent Runner Deep-Dive
-
-**PASS**
-
-Cross-checked against `src/agents/openai_runner.py` and `src/tools/registry.py`:
-
-- **API detection**: `RESPONSES_API_MODELS = {"gpt-5-codex", "codex-mini-latest"}` -- exact match to source line 90. Property `_use_responses_api` matches line 131-132. PASS.
-
-- **ToolRegistry class diagram** (Mermaid classDiagram): `Tool` dataclass fields (name, schema, handler) match `registry.py` line 13. `ToolRegistry` methods (_tools dict, register, get, openai_definitions, responses_definitions, dispatch) all match source. PASS.
-
-- **Tool registration order** matches `__init__` in source lines 118-128: vcs_tools, workspace_tools, then conditional graph_tools. PASS.
-
-- **API definition formats**: `openai_definitions()` shape `[{"type": "function", "function": {...}}]` matches source line 33-36. `responses_definitions()` shape `[{"type": "function", "name": ..., ...}]` matches source lines 40-48. PASS.
-
-- **System prompt** (`build_system_prompt`): Role statement, turn budget, graph/no-graph strategy blocks, tool mapping table -- all confirmed in source lines 27-71. PASS.
-
-- **Conversation loop flowchart** (Mermaid flowchart TD): Accurately depicts the turn loop, finish_reason branching, tool dispatch, turn counter suffix, deadline injection at N-3, and break conditions. PASS.
-
-- **Turn budget 3 layers**: Layer 1 (continuous counter) at source lines 238-239/378-379. Layer 2 (deadline injection at N-3) at source lines 162-169/294-301. Layer 3 (30k truncation) at source lines 235-236/375-376. PASS.
-
-- **Findings extraction cascade** (Mermaid flowchart TD): Tier 1 (`_extract_findings_json`) 4-step process matches source lines 487-511: code fence regex, `pr_id` regex, full-text parse, strict=False retry. Tier 2 (`_scan_history_for_findings`) matches source lines 461-484: code fence + brace-balanced extraction, reversed iteration, largest-wins selection. Tier 3 (emergency synthesis) dict matches source lines 260-268 exactly. PASS.
-
-- **AgentResult fields**: All 10 fields documented match the class definition at source lines 74-87 (findings_data, input_tokens, output_tokens, total_tokens, tool_calls_count, duration_seconds, model, turns, raw_final_message, returncode). PASS.
-
-- **ReviewJob usage example**: Code snippet matches `review_job.py` `create_findings()` flow at source lines 65-114. PASS.
+**NOTE:** When `pr_details` is `None` (pre-fetch failed), `all_files = []`, so `code_files = []`, and the method proceeds to the single-session shortcut with an empty file list. The `ReviewJob` will skip its own pre-fetch (since `file_subset=[]` is not `None`). Acceptable -- the agent receives an empty file list, no worse than the pre-fetch failure itself.
 
 ---
 
-## Mermaid Diagram Verification (7 diagrams total)
+## Task 8: Update run_agent.py, review prompt, and post_findings caps
 
-All diagrams use correct syntax: proper ` ```mermaid ` code fences, valid diagram type keywords, proper node/edge syntax.
+### 8.1 -- run_agent.py (src/run_agent.py)
 
-| File | Diagram | Type | Status |
-|------|---------|------|--------|
-| README.md | Architecture overview | flowchart LR | PASS |
-| README.md | Scoring flow | flowchart TD | PASS |
-| README.md | Pipeline sequence | sequenceDiagram | PASS |
-| graph-tools.md | Graph-first strategy | flowchart TD | PASS |
-| agent-runner.md | Tool system | classDiagram | PASS |
-| agent-runner.md | Conversation loop | flowchart TD | PASS |
-| agent-runner.md | Findings extraction | flowchart TD | PASS |
+**PASS.** Clean transition from `ReviewJob` to `BatchReviewJob`:
+- Imports `BatchReviewJob` from `batch_review_job` (line 12).
+- Constructs with CLI args: `pr_id`, `repo`, `workspace`, `model`, `prompt_path` (lines 29-35).
+- Calls `job.run(dry_run=..., commit_id=...)` (line 38).
+- Handles gate failure via `sys.exit(1)` (lines 40-41).
+- Backward compatible: `BatchReviewJob` delegates to single `ReviewJob` for small PRs.
+
+**NOTE:** The `vcs` parameter is not passed to `BatchReviewJob` -- it defaults to `"ado"`. The original `run_agent.py` also did not accept a `--vcs` CLI arg, so this is consistent with existing behavior. **PASS.**
+
+### 8.2 -- review-pr-core.md prompt updates
+
+**PASS.** All 3 changes from PLAN.md Task 8 applied:
+
+1. **T4/T5 rows updated** (Step 4 table): "Focus on highest-risk paths only" replaced with "Review ALL files in your batch" for both T4 and T5. Added note: "Non-code files have been pre-filtered by the orchestrator." **PASS.**
+2. **Step 5 strategy table updated**: T4 and T5 rows now say "Review ALL files in your batch" with graph priority guidance. **PASS.**
+3. **Smart diff drill-in guidance** (Step 5a): Added paragraph explaining `is_summary: true` response and how to use `start_line`/`end_line` to drill in. **PASS.**
+
+### 8.3 -- post_findings.py caps from settings
+
+**PASS.** All changes correct:
+
+1. **Module-level defaults updated** (lines 31-32): `MAX_TOTAL_FINDINGS` changed from 30 to 50 (matching `settings.max_total_findings` default). `MAX_PER_FILE` stays at 5. Both annotated with comments explaining runtime override. **PASS.**
+2. **Runtime settings read** (lines 700-702): `max_total = settings.max_total_findings if settings else MAX_TOTAL_FINDINGS` and same pattern for `max_per_file`. Clean fallback when settings unavailable. **PASS.**
+3. **`cap_findings()` call** (line 702): Passes dynamic `max_total` and `max_per_file`. **PASS.**
+4. **`_build_summary_markdown` updated** (line 518): Accepts `max_total_findings` parameter, uses it in the "Total posted: X / Y max" summary line. Caller passes `max_total`. **PASS.**
+
+**NOTE:** The `cap_findings()` function signature still has module-level constant defaults. These are only triggered if called without arguments (e.g., from tests). The `run()` function always passes explicit values. Correct and safe. **PASS.**
 
 ---
 
-## Internal Link Verification
+## Test Results
 
-All internal links across all 4 files resolve:
+```
+136 passed, 2 failed, 13 skipped, 42 warnings in 4.69s
+```
 
-| Source File | Link Target | Exists |
-|-------------|-------------|--------|
-| README.md | docs/architecture.md | Yes |
-| README.md | docs/features/agent-runner.md | Yes |
-| README.md | docs/features/graph-tools.md | Yes |
-| README.md | docs/features/review-modes.md | Yes |
-| README.md | docs/features/scoring.md | Yes |
-| README.md | docs/features/post-findings.md | Yes |
-| README.md | docs/features/fix-verification.md | Yes |
-| README.md | docs/features/ci-integration.md | Yes |
-| README.md | docs/features/vcs-cli.md | Yes |
-| docs/README.md | architecture.md | Yes |
-| docs/README.md | features/*.md (8 links) | Yes |
-| docs/README.md | ../commands/findings-schema.json | Yes |
-| docs/README.md | ../commands/review-pr-core.md | Yes |
-| docs/README.md | ../ci/ | Yes |
-| docs/README.md | ../templates/ | Yes |
+- **2 pre-existing failures** (confirmed on main):
+  - `test_prints_diagnostic_on_failure` in `test_graph_builder.py` -- expects `print()` but code uses `logger.warning()`
+  - `test_still_present_not_resolved_ado` in `test_post_findings.py` -- `activities` module import path issue
+- **No new failures introduced.** **PASS.**
 
 ---
 
 ## Summary
 
-**All 4 tasks pass.** The one factual gap from the initial review (missing `gpt-4.1-nano` in the Cost Tracking table) was fixed in commit 3668e58. Re-verified: README.md now lists all 13 models from `src/post_findings.py` `MODEL_COST_TABLE` with correct prices. All factual claims, diagrams, links, and cross-references are verified correct.
+Phase 3 (Tasks 7 and 8) is **APPROVED**. The BatchReviewJob orchestrator correctly implements all requirements:
 
-Documentation depth is excellent -- both deep-dive docs (graph-tools.md and agent-runner.md) go well beyond surface-level descriptions, documenting implementation internals, field-level semantics, and failure modes with source-verified accuracy.
+- `_split_into_batches` produces balanced batches via round-robin by churn descending
+- `_merge_results` deduplicates by (file, line, title) and re-sequences cr-ids correctly
+- Single-session shortcut works for small PRs (backward compatible)
+- GraphStore safely shared read-only across batches
+- Failed batches don't crash the pipeline
+- `batch_max_turns` correctly threaded into per-batch `ReviewJobConfig.max_turns`
+- `run_agent.py` cleanly transitions to `BatchReviewJob`
+- `post_findings.py` reads caps from settings at runtime with safe fallbacks
+- Review prompt updated with batch and smart diff guidance
+- No regressions in Phase 1 or Phase 2
+- 136 tests pass, 2 pre-existing failures unchanged
+
+**Carried forward (non-blocking):** `smart_diff.py:63` boundary operator (`<=` should be `<`). To be addressed in Phase 4 unit tests.

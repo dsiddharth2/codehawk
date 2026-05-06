@@ -20,7 +20,8 @@ _TIMEOUT_TIERS = [
     (10, 30),    # T1/T2: small PR
     (25, 60),    # T3: medium PR
     (50, 120),   # T4: large PR
-    (999999, 300),  # T5: very large PR
+    (100, 600),  # T5: very large PR (51-100 files)
+    (999999, 300),  # T5+: extremely large PR (graph may be incomplete)
 ]
 
 

@@ -9,7 +9,7 @@ import json
 import sys
 from pathlib import Path
 
-from review_job import ReviewJob, ReviewJobConfig
+from batch_review_job import BatchReviewJob
 
 
 def main():
@@ -21,22 +21,18 @@ def main():
     parser.add_argument("--repo", required=True)
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--model", default="o3")
-    parser.add_argument("--max-turns", type=int, default=40)
     parser.add_argument("--prompt-file", required=True, help="Path to review-pr-core.md")
     parser.add_argument("--dry-run", action="store_true", default=False)
     parser.add_argument("--commit-id", default="")
     args = parser.parse_args()
 
-    config = ReviewJobConfig(
+    job = BatchReviewJob(
         pr_id=args.pr_id,
         repo=args.repo,
         workspace=Path(args.workspace),
         model=args.model,
-        max_turns=args.max_turns,
         prompt_path=Path(args.prompt_file),
     )
-
-    job = ReviewJob(config)
 
     try:
         output = job.run(dry_run=args.dry_run, commit_id=args.commit_id)

@@ -101,8 +101,8 @@ def register_workspace_tools(registry: ToolRegistry, workspace: Path):
                 timeout=30, cwd=str(workspace),
             )
             output = proc.stdout or ""
-            if len(output) > 15000:
-                output = output[:15000] + "\n... [truncated]"
+            if len(output) > 25000:
+                output = output[:25000] + "\n... [truncated]"
             if not output and proc.returncode == 1:
                 return json.dumps({"matches": [], "message": "No matches found"})
             return json.dumps({"matches": output, "pattern": pattern})
@@ -145,7 +145,7 @@ def register_workspace_tools(registry: ToolRegistry, workspace: Path):
 
     def handle_read_local_file(args: dict) -> str:
         file_path = args["file_path"]
-        max_lines = args.get("max_lines", 500)
+        max_lines = args.get("max_lines", 1000)
 
         try:
             resolved = _resolve_workspace_path(workspace, file_path)
@@ -188,7 +188,7 @@ def register_workspace_tools(registry: ToolRegistry, workspace: Path):
                     },
                     "max_lines": {
                         "type": "integer",
-                        "description": "Maximum number of lines to return. Default 500.",
+                        "description": "Maximum number of lines to return. Default 1000.",
                     },
                 },
                 "required": ["file_path"],
@@ -272,8 +272,8 @@ def _fallback_grep(pattern: str, search_path: str, max_results: int, workspace: 
             timeout=30, cwd=search_path,
         )
         output = proc.stdout or ""
-        if len(output) > 15000:
-            output = output[:15000] + "\n... [truncated]"
+        if len(output) > 25000:
+            output = output[:25000] + "\n... [truncated]"
         return json.dumps({"matches": output, "pattern": pattern, "backend": "git-grep"})
     except Exception as e:
         return json.dumps({"error": f"Search unavailable: {e}"})
