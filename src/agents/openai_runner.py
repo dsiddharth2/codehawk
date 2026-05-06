@@ -31,27 +31,22 @@ def build_system_prompt(max_turns: int, has_graph: bool) -> str:
     """Build the system prompt dynamically based on turn budget and graph availability."""
     graph_strategy = (
         """\
-GRAPH-FIRST STRATEGY (graph tools are available):
-- Your FIRST tool call MUST be `get_change_analysis`. Use its output to prioritize your review.
-- If `get_change_analysis` returns empty results (risk_score=0, empty arrays), the graph could not \
-analyze these files (common for C#, SQL, config files). Fall back to DIFF-BASED REVIEW below.
-- Do NOT read files one-by-one. Use graph analysis to identify high-risk files, then read only those.
-- Use `get_blast_radius` for T5 PRs (51+ files) to find cascading risks.
-- Use `get_callers` / `get_dependents` for precise structural queries instead of `search_code`.
-
-DIFF-BASED REVIEW (fallback when graph is empty or unavailable):
-- Use `get_file_diff` with source_commit_id and target_commit_id to review ONLY the changed lines.
-- Focus on the highest-churn files first (most additions + deletions).
-- Review ALL files in your assigned batch — do not skip files. The orchestrator has already \
-filtered non-code files and split the PR into manageable batches."""
+PRE-INJECTED CONTEXT:
+- Change analysis (risk scores, review priorities, test gaps) and blast radius are pre-computed \
+and included in the prompt below. Do NOT call `get_change_analysis` or `get_blast_radius`.
+- File diffs are pre-fetched and included in the prompt below. Do NOT call `get_file_diff`.
+- Review ALL the diffs provided. Do not skip files.
+- Use `get_callers` or `get_dependents` ONLY when you need to verify a specific caller relationship.
+- Use `get_file_content` or `read_local_file` ONLY when you need full file context beyond the diff.
+- Minimize tool calls — most of your review should be based on the pre-injected context."""
         if has_graph
         else """\
-NO GRAPH AVAILABLE — use diffs instead of full file reads:
-- Use `get_file_diff` to review changes without reading entire files.
-- Focus on the highest-churn files first (most additions + deletions).
-- Review ALL files in your assigned batch — do not skip files. The orchestrator has already \
-filtered non-code files and split the PR into manageable batches.
-- Use `search_code` for structural queries."""
+PRE-INJECTED CONTEXT:
+- File diffs are pre-fetched and included in the prompt below. Do NOT call `get_file_diff`.
+- Review ALL the diffs provided. Do not skip files.
+- Use `get_file_content` or `read_local_file` ONLY when you need full file context beyond the diff.
+- Use `search_code` for structural queries.
+- Minimize tool calls — most of your review should be based on the pre-injected context."""
     )
 
     return f"""\
@@ -87,8 +82,9 @@ SMART DIFF DRILL-IN:
 
 TURN EFFICIENCY:
 - Do NOT read config files (.codereview.md, .codereview.yml, AGENTS.md) — they are pre-loaded in the prompt.
-- Prefer `get_file_diff` over `read_local_file` for reviewing changes — diffs show exactly what changed.
-- Only use `read_local_file` when you need full file context (e.g., understanding a class structure).
+- Do NOT call `get_file_diff`, `get_change_analysis`, `get_blast_radius`, or `get_pr` — all data is pre-injected.
+- Only use tool calls when you need information NOT in the prompt (e.g., full file context, caller relationships).
+- Your goal: review all pre-injected diffs and produce findings with ZERO or minimal tool calls.
 
 When you have completed your review, output the findings JSON as your final message. \
 Do NOT attempt to write files — just output the JSON directly in a ```json code fence. \

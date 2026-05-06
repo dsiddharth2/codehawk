@@ -70,6 +70,11 @@ class BatchReviewJob:
             len(code_files), len(skipped),
         )
 
+        # --- Step 2b: Extract commit SHAs for tool resolution ---
+        source_commit = getattr(pr_details, "source_commit_id", "") or ""
+        target_commit = getattr(pr_details, "target_commit_id", "") or ""
+        logger.info("Commit SHAs: source=%s target=%s", source_commit[:12], target_commit[:12])
+
         # --- Step 3: Build graph once ---
         graph_store = self._build_graph(len(code_files))
 
@@ -88,6 +93,8 @@ class BatchReviewJob:
                 vcs=self.vcs,
                 file_subset=code_files,
                 pre_built_graph=graph_store,
+                source_commit_id=source_commit,
+                target_commit_id=target_commit,
             )
             job = ReviewJob(config, settings=self.settings)
             return job.run(dry_run=dry_run, commit_id=commit_id)
@@ -107,6 +114,8 @@ class BatchReviewJob:
                     batch_index=i,
                     batch_total=batch_total,
                     graph_store=graph_store,
+                    source_commit_id=source_commit,
+                    target_commit_id=target_commit,
                 )
                 batch_results.append(result)
                 logger.info("Batch %d/%d completed: %d findings", i, batch_total,
@@ -117,6 +126,12 @@ class BatchReviewJob:
 
         # --- Step 7: Merge findings ---
         merged = self._merge_results(batch_results)
+        merged["pr_id"] = self.pr_id
+        merged["repo"] = self.repo
+        merged["vcs"] = self.vcs
+        merged.setdefault("fix_verifications", [])
+        merged.setdefault("agent", "openai-api")
+        merged.setdefault("tool_calls", sum(r.get("tool_calls", 0) for r in batch_results))
         duration = time.time() - start_time
         merged.setdefault("usage", {})["total_duration_seconds"] = round(duration, 2)
 
@@ -171,6 +186,8 @@ class BatchReviewJob:
         batch_index: int,
         batch_total: int,
         graph_store: Any,
+        source_commit_id: str = "",
+        target_commit_id: str = "",
     ) -> Dict[str, Any]:
         """Run a single batch as a ReviewJob and return its findings_data."""
         config = ReviewJobConfig(
@@ -178,7 +195,6 @@ class BatchReviewJob:
             repo=self.repo,
             workspace=self.workspace,
             model=self.model,
-            # batch_max_turns from Settings controls per-batch turn budget
             max_turns=self.settings.batch_max_turns,
             prompt_path=self.prompt_path,
             vcs=self.vcs,
@@ -186,6 +202,8 @@ class BatchReviewJob:
             batch_total=batch_total,
             file_subset=batch_files,
             pre_built_graph=graph_store,
+            source_commit_id=source_commit_id,
+            target_commit_id=target_commit_id,
         )
         job = ReviewJob(config, settings=self.settings)
         job.create_findings()
@@ -249,8 +267,8 @@ class BatchReviewJob:
             if usage.get("model"):
                 model = usage["model"]
 
-            if result.get("review_mode"):
-                review_modes.add(result["review_mode"])
+            for mode in result.get("review_modes", []):
+                review_modes.add(mode)
 
         # Dedup by (file, line, title)
         seen = set()

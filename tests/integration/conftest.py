@@ -27,13 +27,14 @@ logger = logging.getLogger("codehawk.test")
 # Constants
 # ---------------------------------------------------------------------------
 
-MAX_TURNS_INTEGRATION = 30  # cap agent turns in integration tests to control cost
+MAX_TURNS_INTEGRATION = 15  # cap agent turns — diffs and analysis are pre-injected
 
 # Large PR
 #PR_ID = 6435
+PR_ID = 6619
 
 #Small PR
-PR_ID = 6571
+#PR_ID = 6571
 REPO = "BluSKYFunctionApps"
 ADO_ORG = "blub0x"
 ADO_PROJECT = "BluSKY Git"

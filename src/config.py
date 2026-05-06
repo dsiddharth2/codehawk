@@ -123,8 +123,8 @@ class Settings(BaseSettings):
         description="Number of code files per review batch"
     )
     batch_max_turns: int = Field(
-        default=40,
-        ge=10,
+        default=15,
+        ge=5,
         le=100,
         description="Maximum agent turns per batch review session"
     )

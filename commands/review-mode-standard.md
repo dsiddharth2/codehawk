@@ -45,7 +45,13 @@
 
 ## Quality Bar
 
-Only flag findings you would say in a real code review. Do not flag:
-- Style preferences with no correctness impact
-- Valid tradeoffs the developer chose intentionally (check `# cr: intentional` markers)
+Flag every issue a thorough senior reviewer would raise, including:
+- **Code style:** unused imports/usings, inconsistent naming conventions, null-forgiving operators, terse parameter names (`ct` vs `cancellationToken`)
+- **Documentation:** missing XML docs on public APIs, misleading method/test names
+- **Interface design:** `List<>` vs `IReadOnlyList<>`, mutable vs immutable collections, missing guard clauses
+
+Use `code_style` or `documentation` categories and `suggestion` severity for these. They don't affect the CI gate score but provide valuable feedback.
+
+Do not flag:
+- Patterns the developer marked with `# cr: intentional`
 - Patterns that are standard for this codebase (check `.codereview.md`)
