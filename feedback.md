@@ -1,144 +1,149 @@
-# Large PR Batched Review — Phase 2 Code Review
+# Large PR Batched Review -- Phase 3 Code Review
 
 **Reviewer:** codehawk-reviewer
-**Date:** 2026-05-02 22:45:00+05:30
+**Date:** 2026-05-06 10:00:00+05:30
 **Verdict:** APPROVED
 
 > See the recent git history of this file to understand the context of this review.
-> Prior review (26603b4): Phase 1 code review — APPROVED. One non-blocking SHOULD-FIX: threshold boundary operator in smart_diff.py:63 (still open, carried forward below).
+> Prior review (a5ccd3b): Phase 2 code review -- APPROVED. Carried forward: `smart_diff.py:63` boundary operator (`<=` vs `<`), non-blocking, deferred to Phase 4 tests.
 
 ---
 
-## Phase 1 Regression Check
+## Phase 1+2 Regression Check
 
-All 3 Phase 1 modules (config.py, file_filter.py, smart_diff.py) reviewed for regressions against Phase 2 changes. **No regressions found.**
+All Phase 1 modules (config.py, file_filter.py, smart_diff.py) and Phase 2 modules (vcs_tools.py, review_job.py, openai_runner.py, workspace_tools.py, graph_builder.py) reviewed for regressions against Phase 3 changes. **No regressions found.**
 
-- `src/config.py`: No Phase 2 modifications. All 6 batch review fields intact with correct defaults and constraints. **PASS.**
-- `src/file_filter.py`: No modifications since Task 2. Module consumed by review_job.py via import. **PASS.**
-- `src/smart_diff.py`: No modifications since Task 3. Module consumed by vcs_tools.py via import. **PASS.**
+- `src/config.py`: No Phase 3 modifications. All 6 batch review fields intact. **PASS.**
+- `src/file_filter.py`: No modifications. Consumed by both `review_job.py` and `batch_review_job.py`. **PASS.**
+- `src/smart_diff.py`: No modifications. **PASS.**
+- `src/tools/vcs_tools.py`: No Phase 3 modifications. Smart diff integration intact. **PASS.**
+- `src/review_job.py`: No Phase 3 modifications. Batch fields (`file_subset`, `pre_built_graph`, `batch_index`, `batch_total`) intact and consumed correctly by `BatchReviewJob`. **PASS.**
 - **Carried forward:** `smart_diff.py:63` still uses `<=` (should be `<` per requirements.md "Diffs >= 30KB"). Non-blocking, deferred to Phase 4 tests.
 
 ---
 
-## Task 4: Integrate smart diff into vcs_tools.py
+## Task 7: Create BatchReviewJob orchestrator (src/batch_review_job.py)
 
-**PASS.** `handle_get_file_diff` (vcs_tools.py:199-258) correctly implements all 5 requirements from PLAN.md:
+**PASS.** `BatchReviewJob` (282 lines) correctly implements all requirements from PLAN.md Task 7.
 
-1. **Removed hardcoded `[:10000]` truncation.** The old 10KB slice is gone. Diff text flows through smart diff logic unmodified. **PASS.**
+### 7.1 -- Class structure and init
 
-2. **Smart diff summarization.** Lines 230-247: calls `summarize_diff()` with `settings.smart_diff_threshold_kb`, returns `format_summary_for_agent()` text with `is_summary: true` in JSON and drill-in hint when `is_summarized=True`. **PASS.**
+`__init__` accepts all required parameters: `pr_id`, `repo`, `workspace`, `model`, `prompt_path`, `vcs`, `settings`. Settings defaults to `get_settings()` when not provided. **PASS.**
 
-3. **`start_line`/`end_line` drill-in parameters.** Lines 211-227: when both are provided, calls `extract_hunks_in_range()`, caps result at 30KB, returns `drill_in: true` in JSON. Tool schema (lines 282-295) includes both as optional integer params with clear descriptions. **PASS.**
+### 7.2 -- `run()` pipeline (lines 48-139)
 
-4. **30KB safety cap for normal diffs.** Lines 249-258: unsummarized diffs capped at 30,000 chars with truncation message. **PASS.**
+All 8 steps implemented correctly:
 
-5. **Settings threading.** Line 233: `threshold_kb=settings.smart_diff_threshold_kb` — `settings` comes from the `register_vcs_tools` closure parameter. **PASS.**
+1. **Pre-fetch PR data** (line 61): Calls `_fetch_pr_details()` which uses `FetchPRDetailsActivity`. Exception handling returns `None` on failure. **PASS.**
+2. **Filter non-code files** (lines 66-71): Uses `parse_skip_extensions` + `filter_changed_files` with `self.settings.skip_extensions`. Logs kept/skipped counts. **PASS.**
+3. **Build graph once** (line 74): Calls `_build_graph()` with `changed_file_count`. Graph built once and shared across batches via `pre_built_graph`. Exception handling returns `None` on failure. **PASS.**
+4. **Single-session shortcut** (lines 77-93): When `len(code_files) <= self.settings.batch_size`, creates a `ReviewJobConfig` with `file_subset` and `pre_built_graph`, delegates to `ReviewJob.run()`. Backward compatible. **PASS.**
+5. **Batch splitting** (line 96): Calls `_split_into_batches()`. **PASS.**
+6. **Sequential batch execution** (lines 101-116): Iterates batches, calls `_run_batch()`, catches exceptions per-batch so failures don't crash the pipeline. **PASS.**
+7. **Merge findings** (line 119): Calls `_merge_results()`. **PASS.**
+8. **Write merged findings.json and publish** (lines 123-139): Writes to `.cr/findings.json`, then calls `post_findings.run()`. **PASS.**
 
-**NOTE:** Drill-in mode (line 216) casts `start_line`/`end_line` to `int()`. The schema declares them as `"type": "integer"` so OpenAI should always pass integers, but the explicit cast is a safe defensive measure. **PASS.**
+### 7.3 -- `_split_into_batches()` correctness (lines 199-223)
 
-**NOTE:** Drill-in mode returns `added_lines_count` and `removed_lines_count` from the full diff result (lines 222-223), not from the filtered range. This is technically imprecise for drill-in but acceptable — the agent uses these as context, not for decisions.
+**PASS.** Round-robin by churn descending:
+- Sorts by `(additions + deletions)` descending with `hasattr` guard for non-FileChange objects.
+- Computes `num_batches` using ceiling division: `(len + batch_size - 1) // batch_size`.
+- Distributes via `batches[i % num_batches]` -- this correctly interleaves high-churn and low-churn files for balanced workload.
+- Returns empty list for empty input.
 
-**Done criteria:** Tool schema has start_line/end_line: **PASS**. Diffs under threshold returned in full (up to 30KB): **PASS**. Diffs over threshold return summary with is_summary=true: **PASS**. Drill-in returns filtered hunks: **PASS**. Existing tests pass: **PASS.**
+**NOTE:** Ceiling division matches the PLAN.md `ceil(len / batch_size)` requirement without importing `math.ceil`. Correct.
+
+### 7.4 -- `_merge_results()` correctness (lines 225-282)
+
+**PASS.** Dedup and re-sequence:
+- Concatenates all findings from batch results.
+- Dedup by `(file, line, title)` tuple -- matches PLAN.md spec. Preserves first occurrence.
+- Re-sequences cr-ids as `cr-001`, `cr-002`, ... using `f"cr-{i:03d}"`. **PASS.**
+- Sums `input_tokens`, `output_tokens`, `duration_seconds`. **PASS.**
+- Unions `review_modes` via set, sorted for deterministic output. **PASS.**
+- Uses last non-empty `model` string (reasonable for homogeneous batches). **PASS.**
+
+### 7.5 -- `batch_max_turns` threading (line 182)
+
+**PASS.** `_run_batch()` explicitly sets `max_turns=self.settings.batch_max_turns` on the `ReviewJobConfig`. This correctly threads the per-batch turn budget from Settings into each batch's config. The single-session shortcut (line 82) does NOT set `max_turns`, so it inherits the default (40) from `ReviewJobConfig` -- correct since single-session reviews should use the standard budget.
+
+### 7.6 -- GraphStore reuse safety
+
+**PASS.** The graph is built once in `_build_graph()` and passed as `pre_built_graph` to each batch's `ReviewJobConfig`. In `review_job.py` (lines 108-110), when `pre_built_graph` is set it is used directly without modification. The graph is read-only during review (agents query it via `get_callers`, `get_blast_radius`, etc.) so sequential reuse across batches is safe.
+
+### 7.7 -- Error handling
+
+**PASS.** Three levels of resilience:
+- `_fetch_pr_details()`: catches all exceptions, returns `None`, logs warning. When `None`, `all_files = []` (line 62).
+- `_build_graph()`: catches all exceptions, returns `None`, logs warning.
+- Per-batch execution (lines 114-116): catches all exceptions, logs error, continues with remaining batches.
+- If all batches fail, `_merge_results([])` returns a clean empty result.
+
+**NOTE:** When `pr_details` is `None` (pre-fetch failed), `all_files = []`, so `code_files = []`, and the method proceeds to the single-session shortcut with an empty file list. The `ReviewJob` will skip its own pre-fetch (since `file_subset=[]` is not `None`). Acceptable -- the agent receives an empty file list, no worse than the pre-fetch failure itself.
 
 ---
 
-## Task 5: Integrate filtering + batch fields into review_job.py
+## Task 8: Update run_agent.py, review prompt, and post_findings caps
 
-**PASS.** `review_job.py` correctly implements all 4 requirements from PLAN.md:
+### 8.1 -- run_agent.py (src/run_agent.py)
 
-1. **File filtering in `create_findings()`** (lines 93-101): After PR pre-fetch, imports `parse_skip_extensions`/`filter_changed_files`, applies with `self.settings.skip_extensions`, logs filtered/kept counts. Skipped count stored locally and passed to `_build_changed_files_section`. **PASS.**
+**PASS.** Clean transition from `ReviewJob` to `BatchReviewJob`:
+- Imports `BatchReviewJob` from `batch_review_job` (line 12).
+- Constructs with CLI args: `pr_id`, `repo`, `workspace`, `model`, `prompt_path` (lines 29-35).
+- Calls `job.run(dry_run=..., commit_id=...)` (line 38).
+- Handles gate failure via `sys.exit(1)` (lines 40-41).
+- Backward compatible: `BatchReviewJob` delegates to single `ReviewJob` for small PRs.
 
-2. **Removed MAX_FILES=100 cap.** `_build_changed_files_section` (lines 252-287) shows ALL files in the table with no cap. Adds skipped count summary line when `skipped_count > 0`. **PASS.**
+**NOTE:** The `vcs` parameter is not passed to `BatchReviewJob` -- it defaults to `"ado"`. The original `run_agent.py` also did not accept a `--vcs` CLI arg, so this is consistent with existing behavior. **PASS.**
 
-3. **ReviewJobConfig batch fields** (lines 44-47): All 4 optional fields added correctly:
-   - `batch_index: Optional[int] = None`
-   - `batch_total: Optional[int] = None`
-   - `file_subset: Optional[list] = None`
-   - `pre_built_graph: Any = None`
-   **PASS.**
+### 8.2 -- review-pr-core.md prompt updates
 
-4. **Batch mode behavior:**
-   - `file_subset` set → skips PR pre-fetch, uses subset directly (lines 78-81). **PASS.**
-   - `pre_built_graph` set → skips `build_graph()`, uses it directly (lines 108-110). **PASS.**
-   - `batch_index` set → appends batch context to prompt with "Batch N/M" (lines 212-219). **PASS.**
+**PASS.** All 3 changes from PLAN.md Task 8 applied:
 
-**NOTE:** When `file_subset` is provided, the code handles mixed types (string paths or FileChange objects) at lines 126-131, extracting `.path` from objects or using strings directly. This is forward-compatible with Phase 3 BatchReviewJob which may pass either form. **PASS.**
+1. **T4/T5 rows updated** (Step 4 table): "Focus on highest-risk paths only" replaced with "Review ALL files in your batch" for both T4 and T5. Added note: "Non-code files have been pre-filtered by the orchestrator." **PASS.**
+2. **Step 5 strategy table updated**: T4 and T5 rows now say "Review ALL files in your batch" with graph priority guidance. **PASS.**
+3. **Smart diff drill-in guidance** (Step 5a): Added paragraph explaining `is_summary: true` response and how to use `start_line`/`end_line` to drill in. **PASS.**
 
-**Done criteria:** ReviewJobConfig accepts 4 new fields: **PASS**. Filtering applied when no file_subset: **PASS**. No MAX_FILES cap, skipped count shown: **PASS**. Batch mode fields respected: **PASS**. Tests pass: **PASS.**
+### 8.3 -- post_findings.py caps from settings
 
----
+**PASS.** All changes correct:
 
-## Task 6a: Update system prompt for batched review (openai_runner.py)
+1. **Module-level defaults updated** (lines 31-32): `MAX_TOTAL_FINDINGS` changed from 30 to 50 (matching `settings.max_total_findings` default). `MAX_PER_FILE` stays at 5. Both annotated with comments explaining runtime override. **PASS.**
+2. **Runtime settings read** (lines 700-702): `max_total = settings.max_total_findings if settings else MAX_TOTAL_FINDINGS` and same pattern for `max_per_file`. Clean fallback when settings unavailable. **PASS.**
+3. **`cap_findings()` call** (line 702): Passes dynamic `max_total` and `max_per_file`. **PASS.**
+4. **`_build_summary_markdown` updated** (line 518): Accepts `max_total_findings` parameter, uses it in the "Total posted: X / Y max" summary line. Caller passes `max_total`. **PASS.**
 
-**PASS.** `build_system_prompt()` (lines 30-96) correctly implements both requirements:
-
-1. **Removed "review top 10-15 files".** Neither the graph branch (lines 32-46) nor the no-graph branch (lines 48-54) contain this phrase. Both now include "Review ALL files in your assigned batch" instead. **PASS.**
-
-2. **Added smart diff drill-in instructions.** Lines 83-86: dedicated "SMART DIFF DRILL-IN" section explains `is_summary=true` behavior and instructs the agent to use `start_line`/`end_line` to drill in. **PASS.**
-
-**NOTE:** The graph branch includes "Review ALL files" in its DIFF-BASED REVIEW fallback section (lines 45-46), and the no-graph branch includes it in its main instructions (lines 52-53). Both paths covered. **PASS.**
-
-**Done criteria:** No mention of "top 10-15 files": **PASS**. Includes "Review ALL files": **PASS**. Includes smart diff drill-in instructions: **PASS**. Tests pass: **PASS.**
-
----
-
-## Task 6b: Raise truncation and timeout limits
-
-**PASS.** All 4 limit changes implemented correctly:
-
-| Limit | File:Line | Old | New | Verified |
-|-------|-----------|-----|-----|----------|
-| Tool result cap (Chat Completions) | openai_runner.py:263 | 30000 | 50000 | **PASS** |
-| Tool result cap (Responses API) | openai_runner.py:402 | 30000 | 50000 | **PASS** |
-| search_code truncation | workspace_tools.py:104 | 15000 | 25000 | **PASS** |
-| read_local_file default max_lines | workspace_tools.py:148 | 500 | 1000 | **PASS** |
-| Graph timeout (51-100 files) | graph_builder.py:23 | N/A | (100, 600) | **PASS** |
-
-**NOTE: Graph timeout tier ordering.** The `_TIMEOUT_TIERS` list (graph_builder.py:18-25) has an interesting inversion: 51-100 files gets 600s, but 101+ files gets 300s. This is per PLAN.md design: extremely large PRs (101+ files) get a shorter timeout because the graph is expected to be incomplete anyway, favoring faster fallback to diff-based review. The comment "T5+: extremely large PR (graph may be incomplete)" documents this intent. **PASS, but NOTE for Phase 3:** when BatchReviewJob batches files, `changed_file_count` passed to `build_graph` should be the total code file count (not per-batch), since the graph is built once for all batches. Verify in Task 7.
-
-**Done criteria:** Tool result 50KB in both API paths: **PASS**. Search 25KB: **PASS**. Read 1000 lines: **PASS**. Graph 600s for 51-100 files: **PASS**. Tests pass: **PASS.**
+**NOTE:** The `cap_findings()` function signature still has module-level constant defaults. These are only triggered if called without arguments (e.g., from tests). The `run()` function always passes explicit values. Correct and safe. **PASS.**
 
 ---
 
 ## Test Results
 
 ```
-151 collected, 136 passed, 2 failed, 13 skipped (4.70s)
+136 passed, 2 failed, 13 skipped, 42 warnings in 4.69s
 ```
 
-Both failures are **pre-existing and known** (confirmed on main):
-- `test_graph_builder.py::test_prints_diagnostic_on_failure` — logger vs print assertion mismatch
-- `test_post_findings.py::test_still_present_not_resolved_ado` — module patching path issue
-
-No new test failures introduced by Phase 2 changes. **PASS.**
-
----
-
-## Code Quality and Security
-
-- **No security issues.** No user-input injection, no file writes outside workspace, no credential exposure. The `int()` casts in drill-in mode (vcs_tools.py:216) are safe against type confusion. **PASS.**
-- **Consistency with codebase patterns.** All changes follow existing conventions: logger usage, json.dumps with indent=2, type hints, closure-based tool registration. **PASS.**
-- **No dead code introduced.** All new code paths are reachable and serve the stated requirements. **PASS.**
-
----
-
-## Open Items Carried Forward
-
-| # | File | Finding | Severity | Origin | Status |
-|---|------|---------|----------|--------|--------|
-| 1 | src/smart_diff.py:63 | Threshold uses `<=` but spec says `>=` for summarization boundary | SHOULD-FIX | Phase 1 review | Open — deferred to Phase 4 tests |
-| 2 | src/graph_builder.py:18-25 | 101+ files tier gets 300s (less than 51-100 tier at 600s) — intentional per design but verify Task 7 passes correct file count | NOTE | This review | Informational for Phase 3 |
+- **2 pre-existing failures** (confirmed on main):
+  - `test_prints_diagnostic_on_failure` in `test_graph_builder.py` -- expects `print()` but code uses `logger.warning()`
+  - `test_still_present_not_resolved_ado` in `test_post_findings.py` -- `activities` module import path issue
+- **No new failures introduced.** **PASS.**
 
 ---
 
 ## Summary
 
-Phase 2 is **APPROVED**. All 4 tasks (4, 5, 6a, 6b) meet their done criteria. Integration is clean: smart diff wires correctly through vcs_tools, filtering and batch fields integrate into review_job without breaking existing paths, system prompt correctly removes skip guidance and adds batch/drill-in instructions, and all limits are raised to spec.
+Phase 3 (Tasks 7 and 8) is **APPROVED**. The BatchReviewJob orchestrator correctly implements all requirements:
 
-**Passed:** All 4 Phase 2 tasks, all done criteria verified, no regressions in Phase 1, all existing tests pass (136/136 + 2 known pre-existing failures).
+- `_split_into_batches` produces balanced batches via round-robin by churn descending
+- `_merge_results` deduplicates by (file, line, title) and re-sequences cr-ids correctly
+- Single-session shortcut works for small PRs (backward compatible)
+- GraphStore safely shared read-only across batches
+- Failed batches don't crash the pipeline
+- `batch_max_turns` correctly threaded into per-batch `ReviewJobConfig.max_turns`
+- `run_agent.py` cleanly transitions to `BatchReviewJob`
+- `post_findings.py` reads caps from settings at runtime with safe fallbacks
+- Review prompt updated with batch and smart diff guidance
+- No regressions in Phase 1 or Phase 2
+- 136 tests pass, 2 pre-existing failures unchanged
 
-**No new must-fix or should-fix findings.** One informational NOTE about graph timeout tier ordering for Phase 3 awareness.
-
-**Deferred:** smart_diff.py:63 boundary operator (Phase 1 SHOULD-FIX, still open).
-
-**Ready for Phase 3:** ReviewJobConfig batch fields and smart diff integration provide the foundation for BatchReviewJob (Task 7).
+**Carried forward (non-blocking):** `smart_diff.py:63` boundary operator (`<=` should be `<`). To be addressed in Phase 4 unit tests.
