@@ -27,6 +27,7 @@ from typing import Any, Dict, Optional
 
 from agents.openai_runner import AgentResult, OpenAIAgentRunner
 from config import Settings, get_settings
+from smart_diff import summarize_diff, format_summary_for_agent
 
 logger = logging.getLogger("codehawk.review_job")
 
@@ -37,7 +38,7 @@ class ReviewJobConfig:
     repo: str
     workspace: Path
     model: str = "o3"
-    max_turns: int = 40
+    max_turns: int = 15
     prompt_path: Optional[Path] = None
     prompt_text: Optional[str] = None
     vcs: str = "ado"
@@ -45,6 +46,8 @@ class ReviewJobConfig:
     batch_total: Optional[int] = None
     file_subset: Optional[list] = None
     pre_built_graph: Any = None
+    source_commit_id: str = ""
+    target_commit_id: str = ""
 
     def __post_init__(self):
         self.workspace = Path(self.workspace)
@@ -119,8 +122,8 @@ class ReviewJob:
             except Exception as exc:
                 logger.warning("Graph build failed: %s", exc)
 
-        source_commit = getattr(pr_details, "source_commit_id", "") if pr_details else ""
-        target_commit = getattr(pr_details, "target_commit_id", "") if pr_details else ""
+        source_commit = getattr(pr_details, "source_commit_id", "") if pr_details else self.config.source_commit_id
+        target_commit = getattr(pr_details, "target_commit_id", "") if pr_details else self.config.target_commit_id
 
         # Extract path strings for the runner (file_subset items may already be path strings)
         if self.config.file_subset is not None:
@@ -129,6 +132,12 @@ class ReviewJob:
             ]
         else:
             changed_file_paths = [fc.path for fc in changed_files]
+
+        # Pre-compute graph analysis and fetch all diffs to inject into prompt
+        analysis = self._pre_compute_analysis(graph_store, changed_file_paths)
+        diffs = self._pre_fetch_diffs(changed_file_paths, source_commit, target_commit)
+        if analysis or diffs:
+            prompt += self._build_review_context(analysis, diffs, changed_files)
 
         runner = OpenAIAgentRunner(
             settings=self.settings,
@@ -188,6 +197,145 @@ class ReviewJob:
         """Run Phase 1 + Phase 2 end-to-end. Returns Phase 2 output."""
         self.create_findings()
         return self.publish_results(dry_run=dry_run, commit_id=commit_id)
+
+    # ------------------------------------------------------------------
+    # Pre-computation — inject context to reduce agent tool calls
+    # ------------------------------------------------------------------
+
+    def _pre_compute_analysis(self, graph_store, file_paths: list[str]) -> dict:
+        """Run graph analysis once and return structured results."""
+        if not graph_store or not file_paths:
+            return {}
+        try:
+            abs_paths = [str(self.config.workspace / f.lstrip("/")) for f in file_paths]
+            result = graph_store.get_impact_radius(abs_paths)
+            changed_nodes = result.get("changed_nodes", [])
+            impacted_nodes = result.get("impacted_nodes", [])
+
+            non_test_impacted = [
+                n for n in list(changed_nodes) + list(impacted_nodes)
+                if n.kind in ("Function", "Method") and not n.is_test
+            ]
+            risk_score = min(1.0, len(non_test_impacted) / 20.0) if non_test_impacted else 0.0
+
+            review_priorities = [
+                {"name": n.name, "file": n.file_path, "kind": n.kind}
+                for n in changed_nodes
+                if n.kind in ("Function", "Method", "Class")
+            ]
+
+            test_gaps = []
+            for node in changed_nodes:
+                if node.kind in ("Function", "Method") and not node.is_test:
+                    tests = graph_store.get_transitive_tests(node.qualified_name)
+                    if not tests:
+                        test_gaps.append({"name": node.name, "file": node.file_path})
+
+            impacted_functions = [
+                {"name": n.name, "file": n.file_path, "kind": n.kind}
+                for n in impacted_nodes
+                if n.kind in ("Function", "Method")
+            ]
+
+            return {
+                "risk_score": round(risk_score, 2),
+                "review_priorities": review_priorities,
+                "test_gaps": test_gaps,
+                "impacted_files": list(result.get("impacted_files", [])),
+                "impacted_functions": impacted_functions,
+            }
+        except Exception as exc:
+            logger.warning("Pre-compute analysis failed: %s", exc)
+            return {}
+
+    def _pre_fetch_diffs(
+        self, file_paths: list[str], source_commit: str, target_commit: str
+    ) -> dict[str, str]:
+        """Fetch diffs for all files in one go. Returns {path: diff_text}."""
+        if not source_commit or not target_commit:
+            logger.warning("Cannot pre-fetch diffs: missing commit SHAs")
+            return {}
+
+        from activities.fetch_file_diff_activity import FetchFileDiffActivity, FetchFileDiffInput
+
+        diff_activity = FetchFileDiffActivity(settings=self.settings)
+        diffs: dict[str, str] = {}
+        threshold_kb = 30
+
+        for fp in file_paths:
+            try:
+                result = diff_activity.execute(FetchFileDiffInput(
+                    file_path=fp,
+                    source_commit_id=source_commit,
+                    target_commit_id=target_commit,
+                    repository_id=self.config.repo,
+                ))
+                diff_text = result.diff_text
+                if not diff_text:
+                    continue
+                summary = summarize_diff(diff_text, fp, threshold_kb)
+                if summary.is_summarized:
+                    diffs[fp] = format_summary_for_agent(summary)
+                else:
+                    diffs[fp] = diff_text
+            except Exception as exc:
+                logger.warning("Failed to pre-fetch diff for %s: %s", fp, exc)
+
+        logger.info("Pre-fetched diffs for %d/%d files", len(diffs), len(file_paths))
+        return diffs
+
+    def _build_review_context(
+        self, analysis: dict, diffs: dict[str, str], changed_files
+    ) -> str:
+        """Build a markdown context block with analysis + diffs for prompt injection."""
+        lines = ["", "---", "", "## Pre-computed Review Context", ""]
+
+        if analysis:
+            lines.append(f"### Change Analysis (risk score: {analysis.get('risk_score', 0)})")
+            lines.append("")
+
+            priorities = analysis.get("review_priorities", [])
+            if priorities:
+                lines.append("**Review priorities** (ordered by impact):")
+                for p in priorities[:20]:
+                    lines.append(f"- `{p['name']}` ({p['kind']}) in `{p['file']}`")
+                lines.append("")
+
+            test_gaps = analysis.get("test_gaps", [])
+            if test_gaps:
+                lines.append("**Test gaps** (changed functions with no test coverage):")
+                for tg in test_gaps[:15]:
+                    lines.append(f"- `{tg['name']}` in `{tg['file']}`")
+                lines.append("")
+
+            impacted = analysis.get("impacted_functions", [])
+            if impacted:
+                lines.append("**Blast radius** (functions affected by these changes):")
+                for imp in impacted[:20]:
+                    lines.append(f"- `{imp['name']}` ({imp['kind']}) in `{imp['file']}`")
+                lines.append("")
+
+        if diffs:
+            lines.append("### File Diffs")
+            lines.append("")
+            lines.append("All diffs are pre-fetched below. Do NOT call `get_file_diff` — review these directly.")
+            lines.append("")
+
+            for fp, diff_text in diffs.items():
+                lines.append(f"#### `{fp}`")
+                if diff_text.startswith("[DIFF SUMMARY]"):
+                    lines.append(diff_text)
+                else:
+                    lines.append(f"```diff\n{diff_text}\n```")
+                lines.append("")
+
+        if not analysis and not diffs:
+            lines.append("_No pre-computed context available. Use tools to fetch diffs and analysis._")
+
+        lines.append("Do NOT call `get_change_analysis`, `get_blast_radius`, or `get_file_diff` — all data is above.")
+        lines.append("Use `get_callers` or `get_file_content` only if you need additional context for a specific finding.")
+        lines.append("")
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # Internals
