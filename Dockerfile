@@ -26,7 +26,7 @@ RUN pip install --no-cache-dir \
     "pydantic-settings>=2.0" \
     msrest \
     jsonschema \
-    "code-review-graph>=2.3,<3.0"
+    "code-review-graph @ git+https://github.com/tirth8205/code-review-graph.git@main"
 
 # Copy application code
 COPY src/ /app/src/
