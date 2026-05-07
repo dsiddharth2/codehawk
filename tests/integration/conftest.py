@@ -31,13 +31,18 @@ MAX_TURNS_INTEGRATION = 15  # cap agent turns — diffs and analysis are pre-inj
 
 # Large PR
 #PR_ID = 6435
-PR_ID = 6619
+#PR_ID = 6619
 
 #Small PR
-#PR_ID = 6571
-REPO = "BluSKYFunctionApps"
+PR_ID = 6629
+# REPO = "BluSKYFunctionApps"
+# ADO_ORG = "blub0x"
+# ADO_PROJECT = "BluSKY Git"
+
+REPO = "AI Pipelines"
 ADO_ORG = "blub0x"
-ADO_PROJECT = "BluSKY Git"
+ADO_PROJECT = "BluB0X AI"
+
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 SRC_DIR = PROJECT_ROOT / "src"
@@ -96,11 +101,11 @@ def clone_pr_workspace() -> tuple[Path, str]:
     workspace = RESULTS_DIR / "workspace"
     pat = os.environ["AZURE_DEVOPS_PAT"]
     project_encoded = ADO_PROJECT.replace(" ", "%20")
-    auth_url = f"https://{pat}@dev.azure.com/{ADO_ORG}/{project_encoded}/_git/{REPO}"
+    repo_encoded = REPO.replace(" ", "%20")
+    auth_url = f"https://{pat}@dev.azure.com/{ADO_ORG}/{project_encoded}/_git/{repo_encoded}"
 
     if (workspace / ".git").exists():
         logger.info("Re-using existing clone at %s", workspace)
-        # Update remote URL (handles PAT rotation) and open up refspec for any branch
         subprocess.run(
             ["git", "remote", "set-url", "origin", auth_url],
             cwd=str(workspace), check=True, capture_output=True, text=True, timeout=10,
@@ -110,8 +115,8 @@ def clone_pr_workspace() -> tuple[Path, str]:
             cwd=str(workspace), check=True, capture_output=True, text=True, timeout=10,
         )
         subprocess.run(
-            ["git", "fetch", "origin", source_branch, "--depth", "50"],
-            cwd=str(workspace), check=True, capture_output=True, text=True, timeout=60,
+            ["git", "fetch", "origin", source_branch, "--depth", "1"],
+            cwd=str(workspace), check=True, capture_output=True, text=True, timeout=120,
         )
         subprocess.run(
             ["git", "checkout", "-B", source_branch, f"origin/{source_branch}"],
@@ -121,9 +126,9 @@ def clone_pr_workspace() -> tuple[Path, str]:
         logger.info("Cloning %s (branch: %s)...", REPO, source_branch)
         workspace.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
-            ["git", "clone", "--branch", source_branch, "--depth", "50",
+            ["git", "clone", "--branch", source_branch, "--depth", "1",
              auth_url, str(workspace)],
-            check=True, capture_output=True, text=True, timeout=120,
+            check=True, capture_output=True, text=True, timeout=600,
         )
 
     (workspace / ".cr").mkdir(exist_ok=True)

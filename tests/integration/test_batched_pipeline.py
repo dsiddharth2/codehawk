@@ -100,7 +100,7 @@ class TestBatchedPipeline:
             findings_path = workspace / ".cr" / "findings.json"
 
             try:
-                output = job.run(dry_run=True)
+                output = job.run(dry_run=False)
             except Exception as exc:
                 _log.error("Pipeline error (Phase 2 may have failed): %s", exc)
                 phase2_error = exc

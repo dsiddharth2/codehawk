@@ -35,6 +35,7 @@ CODEREVIEW_YML = ".codereview.yml"
 # Cost per 1M tokens: (input, output) in USD.
 # Sorted longest-prefix-first so "gpt-4.1-mini" matches before "gpt-4.1".
 MODEL_COST_TABLE: Dict[str, Tuple[float, float]] = {
+    "gpt-5-codex":           (2.00, 8.00),
     "gpt-4.1-mini":          (0.40, 1.60),
     "gpt-4.1-nano":          (0.10, 0.40),
     "gpt-4.1":               (2.00, 8.00),
@@ -122,6 +123,27 @@ def _gh_run_with_retry(cmd, max_retries: int = 3, base_delay: float = 1.0, **kwa
             else:
                 raise
     raise last_exc  # type: ignore[misc]
+
+
+VALID_CATEGORIES = {"security", "performance", "best_practices", "code_style", "documentation"}
+CATEGORY_REMAP = {
+    "architecture": "best_practices",
+    "reliability": "best_practices",
+    "maintainability": "best_practices",
+    "error_handling": "best_practices",
+    "testing": "best_practices",
+    "correctness": "best_practices",
+    "naming": "code_style",
+    "formatting": "code_style",
+}
+
+
+def _normalize_findings(data: dict) -> None:
+    """Remap agent-invented categories to valid schema values in-place."""
+    for f in data.get("findings", []):
+        cat = f.get("category", "")
+        if cat not in VALID_CATEGORIES:
+            f["category"] = CATEGORY_REMAP.get(cat, "best_practices")
 
 
 def _validate_schema(data: dict) -> List[str]:
@@ -340,7 +362,7 @@ def _post_inline_ado(finding, pr_id: int, repo: str, dry_run: bool) -> bool:
     if dry_run:
         return True
 
-    from activities.post_pr_comment_activity import PostPRCommentActivity, PostPRCommentInput
+    from activities.post_pr_comment_activity import PostPRCommentActivity
     from config import get_settings
 
     severity_icons = {"critical": "🔴", "warning": "⚠️", "suggestion": "💡"}
@@ -353,19 +375,20 @@ def _post_inline_ado(finding, pr_id: int, repo: str, dry_run: bool) -> bool:
     if finding.suggestion:
         body += f"\n\n**Suggestion:** {finding.suggestion}"
     body += f"\n\n*Confidence: {int(finding.confidence * 100)}%*"
-    body += f"\n\n<!-- cr-id: {finding.id} -->"
 
     settings = get_settings()
     activity = PostPRCommentActivity(settings=settings)
-    inp = PostPRCommentInput(
-        pr_id=pr_id,
-        comment_text=body,
-        file_path=finding.file,
-        line_number=finding.line,
-        repository_id=repo or None,
-    )
     try:
-        activity.execute(inp)
+        activity._post_line_comment(
+            pr_id=pr_id,
+            repository_id=repo or settings.azure_devops_repo,
+            project=settings.azure_devops_project,
+            file_path=finding.file,
+            line_number=finding.line,
+            comment_text=body,
+            severity=finding.severity,
+            cr_id=finding.id,
+        )
         return True
     except Exception as exc:
         _eprint(f"Warning: failed to post ADO comment for {finding.id}: {exc}")
@@ -516,76 +539,152 @@ def _build_summary_markdown(
     usage=None,
     cost_estimate: Optional[Dict[str, Any]] = None,
     max_total_findings: int = MAX_TOTAL_FINDINGS,
+    pr_details=None,
+    files_reviewed: int = 0,
+    files_skipped: int = 0,
 ) -> str:
     severity_counts = {"critical": 0, "warning": 0, "suggestion": 0}
+    category_counts = {"security": 0, "performance": 0, "best_practices": 0, "code_style": 0, "documentation": 0}
     for f in filtered_findings:
         severity_counts[f.severity] = severity_counts.get(f.severity, 0) + 1
+        category_counts[f.category] = category_counts.get(f.category, 0) + 1
 
     lines = [
         "<!-- codehawk-summary -->",
-        "# 🤖 codehawk Code Review",
-        "",
-        f"**PR #{findings_file.pr_id}** · `{findings_file.repo}` · modes: `{', '.join(findings_file.review_modes)}`",
-        "",
+        "# 🤖 AI Code Review",
     ]
 
+    # PR Quality Score
     if score:
         lines += [
             "## 📈 PR Quality Score",
-            "",
-            f"### Overall Rating: {score.overall_stars} ({score.quality_level})",
+            f"**Overall Rating: {score.overall_stars} ({score.quality_level})**",
             f"**Total Penalty: {score.total_penalty:.1f} points** _(Lower is better!)_",
             "",
         ]
+        if score.category_penalties:
+            category_icons = {
+                "security": "🔒", "performance": "⚡", "best_practices": "✨",
+                "code_style": "🎨", "documentation": "📚",
+            }
+            lines.append("**Category Penalties**")
+            for cat, penalty in score.category_penalties.items():
+                if penalty > 0:
+                    icon = category_icons.get(cat, "📝")
+                    cat_label = cat.replace("_", " ").title()
+                    lines.append(f"- {icon} {cat_label}: ⭐{'⭐' * max(0, 4 - int(penalty))}{'☆' * min(5, int(penalty))} {penalty:.1f} penalty points")
+            lines.append("")
 
+    # Scoring details (collapsible)
+    if pr_details:
+        pr_title = getattr(pr_details, "title", "") or f"PR #{findings_file.pr_id}"
+        author = getattr(pr_details, "author", "") or "Unknown"
+        source_branch = getattr(pr_details, "source_branch", "") or ""
+        target_branch = getattr(pr_details, "target_branch", "") or ""
+
+        lines += [
+            "<details>",
+            "<summary>📊 Scoring Details (click to expand)</summary>",
+            "",
+            f"**PR {findings_file.pr_id}: {pr_title}**",
+            "",
+            f"- 👤 Author: {author}",
+        ]
+        if source_branch and target_branch:
+            lines.append(f"- 🌿 Branch: `{source_branch}` → `{target_branch}`")
+        lines += [
+            "",
+            "### 📊 Review Statistics",
+            f"- ✅ Files Reviewed: {files_reviewed}",
+            f"- ⏭️ Files Skipped: {files_skipped}",
+            f"- ❌ Files Failed: 0",
+            f"- 💬 Total Comments: {len(filtered_findings)}",
+            "",
+        ]
+    else:
+        lines += [
+            "<details>",
+            "<summary>📊 Scoring Details (click to expand)</summary>",
+            "",
+            f"**PR #{findings_file.pr_id}** · `{findings_file.repo}`",
+            "",
+            f"- 💬 Total Comments: {len(filtered_findings)}",
+            "",
+        ]
+
+    # Severity breakdown
     lines += [
-        "## 📊 Findings Summary",
-        "",
+        "### 🎯 Comment Breakdown by Severity",
         f"- 🔴 Critical: {severity_counts.get('critical', 0)}",
         f"- ⚠️ Warning: {severity_counts.get('warning', 0)}",
         f"- 💡 Suggestion: {severity_counts.get('suggestion', 0)}",
-        f"- Total posted: {len(filtered_findings)} / {max_total_findings} max",
         "",
     ]
 
+    # Category breakdown
+    lines += [
+        "### 📂 Comment Breakdown by Category",
+        f"- 🔒 Security: {category_counts.get('security', 0)}",
+        f"- ⚡ Performance: {category_counts.get('performance', 0)}",
+        f"- ✨ Best Practices: {category_counts.get('best_practices', 0)}",
+        f"- 🎨 Code Style: {category_counts.get('code_style', 0)}",
+        f"- 📚 Documentation: {category_counts.get('documentation', 0)}",
+        "",
+        "</details>",
+        "",
+    ]
+
+    # Fix verifications
     if comparison_md:
-        lines += [
-            "---",
-            "",
-            comparison_md,
-            "",
-        ]
+        lines += [comparison_md, ""]
     elif fix_verifications:
         fixed = sum(1 for fv in fix_verifications if fv.status == "fixed")
         still = sum(1 for fv in fix_verifications if fv.status == "still_present")
         lines += [
             "## 🔄 Fix Verification",
-            "",
             f"- ✅ Fixed: {fixed}",
             f"- ❌ Still present: {still}",
             "",
         ]
 
+    # CI Gate
     gate_passed = gate_result.get("passed", True)
     gate_icon = "✅" if gate_passed else "🚨"
     lines += [
         "## 🚦 CI Gate",
-        "",
         f"{gate_icon} Gate: **{'PASSED' if gate_passed else 'FAILED'}**",
         "",
     ]
-
     if gate_result.get("reasons"):
         for reason in gate_result["reasons"]:
             lines.append(f"- {reason}")
         lines.append("")
 
+    # Next steps
+    lines += [
+        "## 🚀 Next Steps",
+        "1. Review the inline comments on specific files",
+        "2. Address critical and warning items",
+        "3. Consider implementing suggestions for code quality",
+        "4. Reply to any comments if you need clarification",
+        "",
+    ]
+
+    # Overall summary from findings
+    if filtered_findings:
+        lines += ["## 📝 Overall Summary"]
+        for f in filtered_findings:
+            sev_icon = {"critical": "🔴", "warning": "⚠️", "suggestion": "💡"}.get(f.severity, "📝")
+            lines.append(f"- {sev_icon} **{f.title}** (`{f.file}:{f.line}`)")
+        lines.append("")
+
+    # Token usage & cost
     if usage:
         lines += [
             "## 📊 Token Usage",
             "",
-            f"| Metric | Value |",
-            f"|--------|-------|",
+            "| Metric | Value |",
+            "|--------|-------|",
             f"| Model | `{usage.model or 'unknown'}` |",
             f"| Input tokens | {usage.input_tokens:,} |",
             f"| Output tokens | {usage.output_tokens:,} |",
@@ -598,7 +697,7 @@ def _build_summary_markdown(
         lines.append("")
 
     lines.append("---")
-    lines.append("*Generated by [codehawk](https://github.com/your-org/codehawk)*")
+    lines.append("*This review was automatically generated using AI. Please use your judgment when applying suggestions.*")
 
     return "\n".join(lines)
 
@@ -659,8 +758,9 @@ def run(
     Returns:
         Structured output dict for CI gating
     """
-    # 1. Load + validate
+    # 1. Load + normalize + validate
     raw = _load_json(findings_path)
+    _normalize_findings(raw)
     errors = _validate_schema(raw)
     if errors:
         _eprint("ERROR: findings.json failed schema validation:")
@@ -754,6 +854,20 @@ def run(
     # 12. Estimate cost from usage
     cost_estimate = _estimate_cost(findings_file.usage)
 
+    # 12b. Fetch PR details for summary (title, author, branch)
+    pr_details = None
+    files_reviewed = len(set(f.file for f in findings_file.findings))
+    files_skipped = 0
+    if vcs == "ado" and settings:
+        try:
+            from activities.fetch_pr_details_activity import FetchPRDetailsActivity
+            from models.review_models import FetchPRDetailsInput
+            pr_activity = FetchPRDetailsActivity(settings=settings)
+            pr_details = pr_activity.execute(FetchPRDetailsInput(pr_id=pr_id, repository_id=repo))
+            files_reviewed = len(pr_details.file_changes) if pr_details.file_changes else files_reviewed
+        except Exception:
+            pass
+
     # 13. Post/update summary
     summary_md = _build_summary_markdown(
         findings_file=findings_file,
@@ -765,6 +879,9 @@ def run(
         usage=findings_file.usage,
         cost_estimate=cost_estimate,
         max_total_findings=max_total,
+        pr_details=pr_details,
+        files_reviewed=files_reviewed,
+        files_skipped=files_skipped,
     )
 
     if not dry_run and settings:

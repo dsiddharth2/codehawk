@@ -296,9 +296,9 @@ The output must conform to `commands/findings-schema.json`.
 
 ```json
 {
-  "pr_id": <integer>,
-  "repo": "<repo-name>",
-  "vcs": "<ado|github>",
+  "pr_id": $PR_ID,
+  "repo": "$REPO",
+  "vcs": "$VCS",
   "review_modes": ["standard", "security", "architecture", "performance", "migration"],
   "tool_calls": <integer>,
   "agent": "<codex|claude|gemini>",

@@ -46,7 +46,7 @@
     },
     "agent": {
       "type": ["string", "null"],
-      "enum": ["codex", "claude", "gemini", null],
+      "enum": ["codex", "claude", "gemini", "openai-api", null],
       "description": "Agent that produced this file"
     },
     "usage": {
@@ -132,6 +132,11 @@
           "type": ["number", "null"],
           "minimum": 0,
           "description": "Wall-clock duration of the agent run in seconds"
+        },
+        "total_duration_seconds": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "Wall-clock duration of the entire batched pipeline in seconds"
         }
       }
     },

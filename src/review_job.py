@@ -446,6 +446,9 @@ class ReviewJob:
         result.findings_data.setdefault("agent", "openai-api")
 
     def _write_findings(self, data: dict):
+        data["pr_id"] = self.config.pr_id
+        data["repo"] = self.config.repo
+        data["vcs"] = self.config.vcs
         self._findings_path.parent.mkdir(parents=True, exist_ok=True)
         self._findings_path.write_text(
             json.dumps(data, indent=2), encoding="utf-8"
