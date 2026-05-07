@@ -93,8 +93,8 @@ class ReviewJob:
                 if prev:
                     self.config.previous_findings = prev
                     logger.info("Re-push detected (standalone): %d prior findings", len(prev))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Previous findings fetch skipped: %s", exc)
 
         changed_files = []
         pr_details = None
@@ -369,7 +369,8 @@ class ReviewJob:
             "", "---", "",
             "## Previous Review Findings (Pre-fetched)",
             "",
-            f"This PR has **{len(capped)} existing review comment(s)** from a prior run.",
+            f"This PR has **{len(previous_findings)} existing review comment(s)** from a prior run."
+            + (f" _(showing first {len(capped)})_" if len(capped) < len(previous_findings) else ""),
             "You MUST verify each one. Do NOT call `list_threads` -- data is below.",
             "",
             "| cr_id | File | Line | Severity | Title |",
