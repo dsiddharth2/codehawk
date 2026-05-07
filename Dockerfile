@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     ripgrep \
     ca-certificates \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Install GitHub CLI (needed for GitHub VCS posting)
@@ -26,7 +27,7 @@ RUN pip install --no-cache-dir \
     "pydantic-settings>=2.0" \
     msrest \
     jsonschema \
-    "code-review-graph>=2.3,<3.0"
+    "code-review-graph @ git+https://github.com/tirth8205/code-review-graph.git@v2.3.2"
 
 # Copy application code
 COPY src/ /app/src/
