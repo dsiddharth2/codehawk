@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     ripgrep \
     ca-certificates \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Install GitHub CLI (needed for GitHub VCS posting)
@@ -21,7 +22,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 # Install Python dependencies
 RUN pip install --no-cache-dir \
     openai \
-    "azure-devops>=7.1,<8.0" \
+    "azure-devops==7.1.0b4" \
     "pydantic>=2.0" \
     "pydantic-settings>=2.0" \
     msrest \
