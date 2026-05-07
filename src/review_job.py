@@ -32,6 +32,15 @@ from smart_diff import summarize_diff, format_summary_for_agent
 logger = logging.getLogger("codehawk.review_job")
 
 
+def _extract_title_from_comment(comment_text: str) -> str:
+    """Extract bold title from structured comment markdown."""
+    import re
+    match = re.search(r'\*\*(.+?)\*\*', comment_text or "")
+    if match:
+        return match.group(1)[:80]
+    return (comment_text or "")[:60].replace("\n", " ")
+
+
 @dataclass
 class ReviewJobConfig:
     pr_id: int
@@ -48,6 +57,7 @@ class ReviewJobConfig:
     pre_built_graph: Any = None
     source_commit_id: str = ""
     target_commit_id: str = ""
+    previous_findings: Optional[list] = None
 
     def __post_init__(self):
         self.workspace = Path(self.workspace)
@@ -74,6 +84,18 @@ class ReviewJob:
 
     def create_findings(self) -> Path:
         """Run the agent and write findings.json. Returns the path."""
+        if self.config.previous_findings is None:
+            try:
+                from activities.fetch_pr_comments_activity import FetchPRCommentsActivity
+                activity = FetchPRCommentsActivity(self.settings)
+                threads = activity.execute(pr_id=self.config.pr_id, repository_id=self.config.repo or None)
+                prev = [t for t in threads if t.cr_id]
+                if prev:
+                    self.config.previous_findings = prev
+                    logger.info("Re-push detected (standalone): %d prior findings", len(prev))
+            except Exception:
+                pass
+
         changed_files = []
         pr_details = None
         skipped_count = 0
@@ -341,6 +363,36 @@ class ReviewJob:
     # Internals
     # ------------------------------------------------------------------
 
+    def _build_previous_findings_section(self, previous_findings: list) -> str:
+        capped = previous_findings[:30]
+        lines = [
+            "", "---", "",
+            "## Previous Review Findings (Pre-fetched)",
+            "",
+            f"This PR has **{len(capped)} existing review comment(s)** from a prior run.",
+            "You MUST verify each one. Do NOT call `list_threads` -- data is below.",
+            "",
+            "| cr_id | File | Line | Severity | Title |",
+            "|-------|------|------|----------|-------|",
+        ]
+        for f in capped:
+            title = _extract_title_from_comment(f.comment_text)
+            lines.append(
+                f"| `{f.cr_id}` | `{f.file_path}` | {f.line_number} | {f.severity or '-'} | {title} |"
+            )
+
+        lines += [
+            "",
+            "### Instructions",
+            "- For each cr_id, check current code state at the file/line",
+            "- Classify as `fixed`, `still_present`, or `not_relevant`",
+            "- Write into `fix_verifications[]` in findings.json",
+            "- Do NOT re-flag `still_present` issues as new findings",
+            "- Only add new `findings[]` for NEW code issues not in the table above",
+            "",
+        ]
+        return "\n".join(lines)
+
     def _build_prompt(self, changed_files=None, skipped_count: int = 0) -> str:
         if self.config.prompt_text:
             text = self.config.prompt_text
@@ -365,6 +417,9 @@ class ReviewJob:
                 "Review ALL files assigned to this batch. "
                 "Non-code files have already been pre-filtered by the orchestrator.\n"
             )
+
+        if self.config.previous_findings:
+            text += self._build_previous_findings_section(self.config.previous_findings)
 
         text += self._build_config_section()
 
