@@ -1,0 +1,41 @@
+# Git
+.git/
+.gitignore
+
+# Environment / secrets
+.env
+.env.*
+
+# Tests
+tests/
+
+# Results / output
+results/
+findings-output/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Docs / plans
+*.md
+!commands/*.md
+
+# CI
+.github/
