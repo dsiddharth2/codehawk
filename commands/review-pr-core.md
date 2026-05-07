@@ -195,42 +195,19 @@ Do **not** flag: patterns the developer marked with `# cr: intentional`, or patt
 
 ### 6a — Detecting a re-push
 
-Check for existing threads:
+Check whether the prompt contains a **"Previous Review Findings (Pre-fetched)"** section.
 
-**ADO:**
-```bash
-python vcs.py list-threads --pr $PR_ID --repo $REPO
-```
+- If present: this is a **re-push**. Prior findings are pre-injected. Do NOT call `list_threads`.
+- If not present: this is a **first-push**. Skip Steps 6b-6d entirely and proceed to Step 7.
 
-**GitHub:**
-```bash
-gh api repos/$REPO/pulls/$PR_ID/comments
-```
+### 6b — Identify what changed
 
-Scan each comment body for `<!-- cr-id: cr-xxx -->` markers. If **any** such markers are found, this is a re-push. Collect all `cr_id` values — these are the prior findings you must now verify.
-
-If no cr-id markers are found, skip Steps 6b and 6c entirely and proceed to Step 7 as a first-push review.
-
-### 6b — Get the delta since last review
-
-On a re-push, you must identify what changed since the prior review so you only flag NEW issues for new code.
-
-```bash
-# Get commit SHAs
-git log --oneline -5
-
-# Diff between prior review head and current head (new code only)
-git diff <PRIOR_HEAD_SHA>..<CURRENT_HEAD_SHA> -- <file_path>
-```
-
-- `PRIOR_HEAD_SHA` is the commit SHA from the previous review push (check `git log` for the commit just before the current HEAD)
-- `CURRENT_HEAD_SHA` is `HEAD` (or `$HEAD_SHA` if set)
-
-Your new `findings[]` must only flag issues introduced in this delta. Do not re-flag code that existed in the prior review state.
+Use the pre-injected diffs to see what changed. Your new `findings[]` must only flag issues
+in the current changes. Do not re-flag code from prior review (handle via `fix_verifications[]`).
 
 ### 6c — Classify each prior finding
 
-For each prior `cr_id` collected in Step 6a, read the current file at the specified location and apply these rules **in order**:
+For each prior `cr_id` from the pre-injected "Previous Review Findings" table, check the current code at the specified file/line and apply these rules **in order**:
 
 **`not_relevant`** — assign this status if ANY of the following are true:
 - The file containing the finding was deleted in this PR
@@ -248,16 +225,7 @@ For each prior `cr_id` collected in Step 6a, read the current file at the specif
 - The file exists and the problematic pattern remains at (or very near) the original line
 - The code has been changed but the underlying issue persists (e.g., a different unsanitized variable is now used instead)
 
-To check the current state of a file at the finding's location:
-
-```bash
-# Read the current file
-cat /workspace/<file_path>
-# or
-git show HEAD:<file_path>
-```
-
-Then compare what you see against what the finding described.
+Use the pre-injected diffs and `get_file_content` (if needed) to check the current state of the code at the finding's location. Compare what you see against what the finding described.
 
 ### 6d — Write fix_verifications[]
 

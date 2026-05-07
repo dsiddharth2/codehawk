@@ -75,6 +75,11 @@ class BatchReviewJob:
         target_commit = getattr(pr_details, "target_commit_id", "") or ""
         logger.info("Commit SHAs: source=%s target=%s", source_commit[:12], target_commit[:12])
 
+        # --- Step 2c: Fetch previous findings for re-push detection ---
+        previous_findings = self._fetch_previous_findings()
+        if previous_findings:
+            logger.info("Re-push detected: %d previous findings", len(previous_findings))
+
         # --- Step 3: Build graph once ---
         graph_store = self._build_graph(len(code_files))
 
@@ -95,6 +100,7 @@ class BatchReviewJob:
                 pre_built_graph=graph_store,
                 source_commit_id=source_commit,
                 target_commit_id=target_commit,
+                previous_findings=previous_findings or None,
             )
             job = ReviewJob(config, settings=self.settings)
             return job.run(dry_run=dry_run, commit_id=commit_id)
@@ -116,6 +122,7 @@ class BatchReviewJob:
                     graph_store=graph_store,
                     source_commit_id=source_commit,
                     target_commit_id=target_commit,
+                    previous_findings=previous_findings,
                 )
                 batch_results.append(result)
                 logger.info("Batch %d/%d completed: %d findings", i, batch_total,
@@ -130,7 +137,6 @@ class BatchReviewJob:
         merged["repo"] = self.repo
         merged["vcs"] = self.vcs
         merged.setdefault("review_modes", ["standard"])
-        merged.setdefault("fix_verifications", [])
         merged.setdefault("agent", "openai-api")
         merged.setdefault("tool_calls", sum(r.get("tool_calls", 0) for r in batch_results))
         duration = time.time() - start_time
@@ -167,6 +173,17 @@ class BatchReviewJob:
             logger.warning("PR pre-fetch failed: %s", exc)
             return None
 
+    def _fetch_previous_findings(self) -> list:
+        """Fetch existing review threads with cr_id markers."""
+        try:
+            from activities.fetch_pr_comments_activity import FetchPRCommentsActivity
+            activity = FetchPRCommentsActivity(settings=self.settings)
+            threads = activity.execute(pr_id=self.pr_id, repository_id=self.repo or None)
+            return [t for t in threads if t.cr_id]
+        except Exception as exc:
+            logger.warning("Failed to fetch previous findings: %s", exc)
+            return []
+
     def _build_graph(self, changed_file_count: int):
         """Build the code graph once for reuse across batches."""
         try:
@@ -189,8 +206,20 @@ class BatchReviewJob:
         graph_store: Any,
         source_commit_id: str = "",
         target_commit_id: str = "",
+        previous_findings: list | None = None,
     ) -> Dict[str, Any]:
         """Run a single batch as a ReviewJob and return its findings_data."""
+        batch_previous = None
+        if previous_findings:
+            batch_paths = {
+                (fc.path if hasattr(fc, 'path') else fc).lstrip('/')
+                for fc in batch_files
+            }
+            batch_previous = [
+                f for f in previous_findings
+                if f.file_path.lstrip('/') in batch_paths
+            ] or None
+
         config = ReviewJobConfig(
             pr_id=self.pr_id,
             repo=self.repo,
@@ -205,6 +234,7 @@ class BatchReviewJob:
             pre_built_graph=graph_store,
             source_commit_id=source_commit_id,
             target_commit_id=target_commit_id,
+            previous_findings=batch_previous,
         )
         job = ReviewJob(config, settings=self.settings)
         job.create_findings()
@@ -297,5 +327,19 @@ class BatchReviewJob:
 
         if review_modes:
             merged["review_modes"] = sorted(review_modes)
+
+        all_fix_verifications = []
+        for result in batch_results:
+            all_fix_verifications.extend(result.get("fix_verifications", []))
+
+        seen_cr_ids: set[str] = set()
+        deduped_fv = []
+        for fv in all_fix_verifications:
+            cr_id = fv.get("cr_id", "")
+            if cr_id and cr_id not in seen_cr_ids:
+                seen_cr_ids.add(cr_id)
+                deduped_fv.append(fv)
+
+        merged["fix_verifications"] = deduped_fv
 
         return merged

@@ -549,10 +549,29 @@ def _build_summary_markdown(
         severity_counts[f.severity] = severity_counts.get(f.severity, 0) + 1
         category_counts[f.category] = category_counts.get(f.category, 0) + 1
 
+    is_rereview = bool(fix_verifications)
     lines = [
         "<!-- codehawk-summary -->",
-        "# 🤖 AI Code Review",
+        "# 🔄 AI Code Re-Review — Fix Verification" if is_rereview else "# 🤖 AI Code Review",
     ]
+
+    if is_rereview:
+        fixed = sum(1 for fv in fix_verifications if fv.status == "fixed")
+        still = sum(1 for fv in fix_verifications if fv.status == "still_present")
+        not_relevant = sum(1 for fv in fix_verifications if fv.status == "not_relevant")
+        total_verified = fixed + still + not_relevant
+        fix_rate = (fixed / total_verified * 100) if total_verified > 0 else 0
+        lines += [
+            "",
+            "## 🔧 Fix Summary",
+            f"- ✅ **Issues Fixed:** {fixed} / {total_verified}",
+            f"- ❌ **Still Present:** {still} / {total_verified}" if still else "",
+            f"- ➖ **Not Relevant:** {not_relevant}" if not_relevant else "",
+            f"- **Fix Rate:** {fix_rate:.0f}%",
+            "",
+        ]
+        lines = [l for l in lines if l is not None and l != ""]
+        lines.append("")
 
     # PR Quality Score
     if score:
@@ -634,18 +653,22 @@ def _build_summary_markdown(
         "",
     ]
 
-    # Fix verifications
+    # Fix verification details
     if comparison_md:
         lines += [comparison_md, ""]
     elif fix_verifications:
-        fixed = sum(1 for fv in fix_verifications if fv.status == "fixed")
-        still = sum(1 for fv in fix_verifications if fv.status == "still_present")
         lines += [
-            "## 🔄 Fix Verification",
-            f"- ✅ Fixed: {fixed}",
-            f"- ❌ Still present: {still}",
+            "## 🔄 Fix Verification Details",
             "",
         ]
+        for fv in fix_verifications:
+            if fv.status == "fixed":
+                lines.append(f"- ✅ **{fv.cr_id}** — Fixed: {fv.reason}")
+            elif fv.status == "still_present":
+                lines.append(f"- ❌ **{fv.cr_id}** — Still present: {fv.reason}")
+            elif fv.status == "not_relevant":
+                lines.append(f"- ➖ **{fv.cr_id}** — Not relevant: {fv.reason}")
+        lines.append("")
 
     # CI Gate
     gate_passed = gate_result.get("passed", True)
@@ -887,13 +910,14 @@ def run(
     if not dry_run and settings:
         try:
             if vcs == "ado":
-                from activities.update_summary_activity import UpdateSummaryActivity, UpdateSummaryInput
-                summary_activity = UpdateSummaryActivity(settings=settings)
-                summary_activity.execute(UpdateSummaryInput(
+                from activities.post_pr_comment_activity import PostPRCommentActivity
+                comment_activity = PostPRCommentActivity(settings=settings)
+                comment_activity._post_summary_comment(
                     pr_id=pr_id,
-                    new_content=summary_md,
-                    repository_id=repo or None,
-                ))
+                    repository_id=repo or settings.azure_devops_repo,
+                    project=settings.azure_devops_project,
+                    comment_text=summary_md,
+                )
             else:
                 _gh_run_with_retry(
                     ["gh", "pr", "comment", str(pr_id), "--body", summary_md, "--repo", repo],
