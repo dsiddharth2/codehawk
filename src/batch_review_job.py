@@ -129,6 +129,7 @@ class BatchReviewJob:
         merged["pr_id"] = self.pr_id
         merged["repo"] = self.repo
         merged["vcs"] = self.vcs
+        merged.setdefault("review_modes", ["standard"])
         merged.setdefault("fix_verifications", [])
         merged.setdefault("agent", "openai-api")
         merged.setdefault("tool_calls", sum(r.get("tool_calls", 0) for r in batch_results))
