@@ -79,9 +79,13 @@ class BatchReviewJob:
         logger.info("Commit SHAs: source=%s target=%s", source_commit[:12], target_commit[:12])
 
         # --- Step 2c: Fetch previous findings for re-push detection ---
-        previous_findings = self._fetch_previous_findings()
-        if previous_findings:
-            logger.info("Re-push detected: %d previous findings", len(previous_findings))
+        if self.review_mode == ReviewMode.CHECK_NEW:
+            previous_findings = []
+            logger.info("CHECK_NEW mode: skipping previous findings fetch")
+        else:
+            previous_findings = self._fetch_previous_findings()
+            if previous_findings:
+                logger.info("Re-push detected: %d previous findings", len(previous_findings))
 
         # --- Step 3: Build graph once ---
         graph_store = self._build_graph(len(code_files))
@@ -104,6 +108,7 @@ class BatchReviewJob:
                 source_commit_id=source_commit,
                 target_commit_id=target_commit,
                 previous_findings=previous_findings or None,
+                review_mode=self.review_mode,
             )
             job = ReviewJob(config, settings=self.settings)
             return job.run(dry_run=dry_run, commit_id=commit_id)
@@ -238,6 +243,7 @@ class BatchReviewJob:
             source_commit_id=source_commit_id,
             target_commit_id=target_commit_id,
             previous_findings=batch_previous,
+            review_mode=self.review_mode,
         )
         job = ReviewJob(config, settings=self.settings)
         job.create_findings()
