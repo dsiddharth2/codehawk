@@ -232,6 +232,7 @@ class FindingsFile:
     repo: str
     vcs: str                         # "ado" | "github"
     review_modes: List[str]          # e.g. ["standard", "security"]
+    summary: Optional[str] = None
     findings: List[Finding] = field(default_factory=list)
     fix_verifications: List[FixVerification] = field(default_factory=list)
     tool_calls: int = 0

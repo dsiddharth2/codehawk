@@ -223,6 +223,7 @@ def _parse_findings_file(data: dict):
         repo=data["repo"],
         vcs=data["vcs"],
         review_modes=data.get("review_modes", []),
+        summary=data.get("summary"),
         findings=findings,
         fix_verifications=fix_verifications,
         tool_calls=data.get("tool_calls", 0),
@@ -693,9 +694,17 @@ def _build_summary_markdown(
         "",
     ]
 
-    # Overall summary from findings
+    # Overall summary — agent-generated narrative
+    if getattr(findings_file, "summary", None):
+        lines += [
+            "## 📝 Overall Summary",
+            findings_file.summary,
+            "",
+        ]
+
+    # Findings list
     if filtered_findings:
-        lines += ["## 📝 Overall Summary"]
+        lines += ["## 🔍 Findings"]
         for f in filtered_findings:
             sev_icon = {"critical": "🔴", "warning": "⚠️", "suggestion": "💡"}.get(f.severity, "📝")
             lines.append(f"- {sev_icon} **{f.title}** (`{f.file}:{f.line}`)")

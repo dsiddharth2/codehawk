@@ -262,6 +262,18 @@ When your review is complete, write the findings file.
 
 The output must conform to `commands/findings-schema.json`.
 
+### The `summary` field
+
+Write a narrative overview (4-8 sentences) that helps a manual reviewer understand the PR without reading every file. Include:
+- **What the PR does** — the feature, fix, or refactor in plain language
+- **Architecture & design** — how the code is structured, key patterns used, where it fits in the codebase
+- **How the code works** — the flow from entry point through the main logic
+- **Dependencies affected** — new packages, changed interfaces, impacted modules
+- **Test coverage** — what's tested and any gaps
+- **Overall assessment** — quality level, key concerns, or praise
+
+This summary is posted as the top-level PR comment and is the first thing reviewers see.
+
 ```json
 {
   "pr_id": $PR_ID,
@@ -270,6 +282,7 @@ The output must conform to `commands/findings-schema.json`.
   "review_modes": ["standard", "security", "architecture", "performance", "migration"],
   "tool_calls": <integer>,
   "agent": "<codex|claude|gemini>",
+  "summary": "This PR adds image extraction support to the attachment processor, introducing a new VisionAnalyzer utility that calls the OpenAI vision API. The architecture follows the existing extractor pattern — a new ImageExtractor class under utils/extractors/ plugs into the AttachmentProcessor pipeline via the file_content_extractor dispatcher. Key design decision: vision analysis is gated behind a feature flag and falls back gracefully if the API key lacks vision permissions. Dependencies: adds Pillow to requirements.txt for image preprocessing. Test coverage is solid with 3 new test files covering the extractor, vision analyzer, and integration with attachment_processor. Main concern: the API key used for vision may differ from the chat completion key — the fallback logic should validate key permissions at startup rather than failing at runtime.",
   "findings": [
     {
       "id": "cr-001",
