@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from config import Settings, get_settings
 from file_filter import filter_changed_files, parse_skip_extensions
+from models.review_models import ReviewMode
 from review_job import ReviewJob, ReviewJobConfig
 
 logger = logging.getLogger("codehawk.batch_review")
@@ -36,6 +37,7 @@ class BatchReviewJob:
         prompt_path: Optional[Path] = None,
         vcs: str = "ado",
         settings: Optional[Settings] = None,
+        review_mode: ReviewMode = ReviewMode.FULL,
     ):
         self.pr_id = pr_id
         self.repo = repo
@@ -44,6 +46,7 @@ class BatchReviewJob:
         self.prompt_path = prompt_path
         self.vcs = vcs
         self.settings = settings or get_settings()
+        self.review_mode = review_mode
 
     def run(self, dry_run: bool = False, commit_id: str = "") -> Dict[str, Any]:
         """Run the full batched review pipeline.
@@ -76,9 +79,13 @@ class BatchReviewJob:
         logger.info("Commit SHAs: source=%s target=%s", source_commit[:12], target_commit[:12])
 
         # --- Step 2c: Fetch previous findings for re-push detection ---
-        previous_findings = self._fetch_previous_findings()
-        if previous_findings:
-            logger.info("Re-push detected: %d previous findings", len(previous_findings))
+        if self.review_mode == ReviewMode.CHECK_NEW:
+            previous_findings = []
+            logger.info("CHECK_NEW mode: skipping previous findings fetch")
+        else:
+            previous_findings = self._fetch_previous_findings()
+            if previous_findings:
+                logger.info("Re-push detected: %d previous findings", len(previous_findings))
 
         # --- Step 3: Build graph once ---
         graph_store = self._build_graph(len(code_files))
@@ -101,6 +108,7 @@ class BatchReviewJob:
                 source_commit_id=source_commit,
                 target_commit_id=target_commit,
                 previous_findings=previous_findings or None,
+                review_mode=self.review_mode,
             )
             job = ReviewJob(config, settings=self.settings)
             return job.run(dry_run=dry_run, commit_id=commit_id)
@@ -235,6 +243,7 @@ class BatchReviewJob:
             source_commit_id=source_commit_id,
             target_commit_id=target_commit_id,
             previous_findings=batch_previous,
+            review_mode=self.review_mode,
         )
         job = ReviewJob(config, settings=self.settings)
         job.create_findings()

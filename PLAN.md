@@ -1,130 +1,73 @@
-# codehawk-batched-review — Implementation Plan
+﻿# Review Modes — Implementation Plan
 
-> Enable full-coverage review of large PRs (50+ files) by adding file filtering (skip non-code files), smart diff summarization (large diffs return hunk summaries with drill-in), and batched agent sessions (split code files into batches, run each as an independent ReviewJob with shared graph, merge findings).
+> Add two mutually exclusive CLI flags (--verify-fixes and --check-new-findings) to control whether a review run verifies prior findings, looks for new issues, or does both (current default). Introduces a ReviewMode enum threaded through the pipeline, with mode-specific agent prompt injection and defense-in-depth guards in _write_findings().
 
 ---
 
 ## Tasks
 
-### Phase 1: Foundation Modules (No Dependencies)
+### Phase 1: Foundation — Enum, Config, CLI
 
-#### Task 1: Add config fields to Settings
-- **Change:** Add 6 new fields to the `Settings` class in `src/config.py`: `skip_extensions` (str, comma-separated, default includes .md,.json,.yaml,.yml,.xml,.lock,.png,.jpg,.jpeg,.gif,.svg,.ico,.csproj,.sln,.config,.env,.gitignore,.dockerignore,.editorconfig,.prettierrc,.eslintignore), `smart_diff_threshold_kb` (int, ge=1, le=500, default 30), `batch_size` (int, ge=5, le=100, default 25), `batch_max_turns` (int, ge=10, le=100, default 40), `max_total_findings` (int, default 50), `max_per_file_findings` (int, default 5).
-- **Files:** `src/config.py`
+#### Task 1: Add ReviewMode enum and thread through config
+- **Change:** (1) Add ReviewMode(str, Enum) to src/models/review_models.py with values FULL = "full", VERIFY_FIXES = "verify_fixes", CHECK_NEW = "check_new". (2) Add review_mode: ReviewMode = ReviewMode.FULL field to ReviewJobConfig in src/review_job.py. Import ReviewMode. (3) Add review_mode: ReviewMode = ReviewMode.FULL parameter to BatchReviewJob.__init__ in src/batch_review_job.py, store as self.review_mode. Import ReviewMode.
+- **Files:** src/models/review_models.py, src/review_job.py, src/batch_review_job.py
 - **Tier:** cheap
-- **Done when:** `Settings()` loads with default values for all 6 new fields; existing tests still pass (`pytest tests/`).
+- **Done when:** from models.review_models import ReviewMode works; ReviewMode.FULL, .VERIFY_FIXES, .CHECK_NEW are valid; ReviewJobConfig(review_mode=ReviewMode.VERIFY_FIXES) accepted; BatchReviewJob accepts review_mode kwarg; all 190 existing tests pass.
 - **Blockers:** None
 
-#### Task 2: Create file_filter module
-- **Change:** Create `src/file_filter.py` with two functions: `parse_skip_extensions(csv: str) -> set[str]` normalizes a comma-separated extension list (lowercase, leading dot), and `filter_changed_files(file_changes, skip_extensions) -> tuple[list, list]` splits file changes into `(code_files, skipped_files)`. Deleted files (`change_type='delete'`) are always skipped.
-- **Files:** `src/file_filter.py` (new)
-- **Tier:** cheap
-- **Done when:** Module importable from `src/`; `parse_skip_extensions` handles edge cases (no dot prefix, mixed case, whitespace); `filter_changed_files` correctly partitions based on extension and change type.
-- **Blockers:** None
-
-#### Task 3: Create smart_diff module
-- **Change:** Create `src/smart_diff.py` with: `DiffSummary` dataclass (file_path, total_size_bytes, hunks list, is_summarized bool), `summarize_diff(diff_text, file_path, threshold_kb)` returns `is_summarized=False` for small diffs or parsed hunk summaries for large diffs, `format_summary_for_agent(summary)` formats hunk info as readable text for the agent, and `extract_hunks_in_range(diff_text, start_line, end_line)` filters diff text to only hunks overlapping a line range.
-- **Files:** `src/smart_diff.py` (new)
+#### Task 2: Add CLI flags and thread review_mode through BatchReviewJob
+- **Change:** (1) In src/run_agent.py, add a mutually exclusive argparse group with --verify-fixes (store_true) and --check-new-findings (store_true). Resolve to ReviewMode enum and pass review_mode= to BatchReviewJob(...). (2) In BatchReviewJob.run(), conditionally skip _fetch_previous_findings() when review_mode == CHECK_NEW. Pass review_mode=self.review_mode to every ReviewJobConfig(...) constructor (both single-session path ~line 92 and batched path ~line 223).
+- **Files:** src/run_agent.py, src/batch_review_job.py
 - **Tier:** standard
-- **Done when:** Module importable; small diffs return `is_summarized=False`; large diffs parse `@@ -N,M +N,M @@` hunk headers correctly with counts; `extract_hunks_in_range` returns only relevant hunks; `format_summary_for_agent` produces readable output.
-- **Blockers:** None — pure functions, no external dependencies.
+- **Done when:** python src/run_agent.py --help shows both flags; passing both raises argparse error; --verify-fixes sets review_mode=VERIFY_FIXES; --check-new-findings sets review_mode=CHECK_NEW; default is FULL; BatchReviewJob.run() skips _fetch_previous_findings() for CHECK_NEW; all 190 existing tests pass.
+- **Blockers:** Task 1
 
-#### VERIFY: Phase 1 — Foundation Modules
-- Run `pytest tests/` — all existing tests pass
-- Import `file_filter`, `smart_diff`, confirm no import errors
-- Verify `Settings()` has new fields with correct defaults
-- Report: tests passing, any regressions, any issues found
+#### VERIFY: Phase 1 — Foundation
+- Run pytest tests/ — all 190 existing tests pass
+- Verify ReviewMode enum imports correctly
+- Verify CLI flags appear in --help and are mutually exclusive
+- Verify review_mode threads through BatchReviewJob to ReviewJobConfig
+- Report: tests passing, any regressions
 
 ---
 
-### Phase 2: Integration (Depends on Phase 1)
+### Phase 2: Conditional Behavior — Prompt, Write Guards, Post-Findings
 
-#### Task 4: Integrate smart diff into vcs_tools.py
-- **Change:** Modify `handle_get_file_diff` in `src/tools/vcs_tools.py`: (1) Remove hardcoded `[:10000]` truncation at line 210. (2) Import and call `summarize_diff()` — if `is_summarized`, return `format_summary_for_agent()` text with `is_summary: true` in JSON response and a hint to drill in. (3) Add `start_line`/`end_line` optional integer parameters to the `get_file_diff` tool schema. When provided, call `extract_hunks_in_range()` to return only the relevant diff portion (drill-in mode, capped at 30KB). (4) For normal unsummarized diffs, raise safety cap from 10KB to 30KB. (5) Thread `settings.smart_diff_threshold_kb` through — `settings` is already passed to `register_vcs_tools`.
-- **Files:** `src/tools/vcs_tools.py`
+#### Task 3: ReviewJob mode-specific prompt injection and write guards
+- **Change:** (1) In ReviewJob.create_findings() (~line 87), wrap the standalone prior-findings fetch in if self.config.review_mode != ReviewMode.CHECK_NEW. (2) In ReviewJob._build_prompt() (~line 422), after the existing previous_findings section, add mode-specific instruction blocks: for VERIFY_FIXES append verify-only instructions ("ONLY verify prior findings, findings[] MUST be empty, populate fix_verifications[] for every prior cr_id, skip Steps 3-5"); for CHECK_NEW append fresh-review instructions ("no prior findings, fix_verifications[] MUST be empty, skip Step 6"). Add two new private methods _build_verify_only_instructions() and _build_check_new_instructions(). (3) In ReviewJob._write_findings() (or wherever findings.json is written), add defense-in-depth guards: if VERIFY_FIXES, strip findings[] to empty and set review_modes to include "verify_fixes"; if CHECK_NEW, strip fix_verifications[] to empty and set review_modes to include "check_new".
+- **Files:** src/review_job.py
 - **Tier:** standard
-- **Done when:** `get_file_diff` tool schema includes `start_line`/`end_line` optional params; diffs under threshold returned in full (up to 30KB); diffs over threshold return structured summary with `is_summary: true`; drill-in with `start_line`/`end_line` returns filtered hunks; existing tests pass.
-- **Blockers:** Task 3 (smart_diff.py must exist)
+- **Done when:** VERIFY_FIXES mode: prompt contains "VERIFY-ONLY MODE", _write_findings strips any agent-produced findings; CHECK_NEW mode: prompt contains "FRESH REVIEW MODE", prior-findings fetch skipped, _write_findings strips fix_verifications; FULL mode: no changes to current behavior; all 190 existing tests pass.
+- **Blockers:** Tasks 1-2
 
-#### Task 5: Integrate filtering + batch fields into review_job.py
-- **Change:** (1) In `create_findings()`, after PR pre-fetch (line 79), insert filtering: import `parse_skip_extensions`/`filter_changed_files`, apply to `changed_files`, log filtered/kept counts. Use `self.settings.skip_extensions`. Store the skipped count locally for the summary line — no need to thread it through config. (2) Remove `MAX_FILES = 100` cap in `_build_changed_files_section()` (line 212) — show ALL code files. Add a summary line for skipped non-code files count (passed as a parameter from `create_findings()`). (3) Add optional fields to `ReviewJobConfig` dataclass: `batch_index: Optional[int] = None`, `batch_total: Optional[int] = None`, `file_subset: Optional[list] = None`, `pre_built_graph = None`. (4) When `file_subset` is set in `create_findings()`, skip PR pre-fetch and use subset directly as `changed_files`. When `pre_built_graph` is set, skip `build_graph()` and use it. When `batch_index` is set, append batch context to prompt ("Batch N/M — reviewing N files of M total code files").
-- **Files:** `src/review_job.py`
+#### Task 4: post_findings.py mode-aware summary and gating
+- **Change:** (1) In post_findings.run() (~line 803), detect verify-only mode: is_verify_only = "verify_fixes" in findings_file.review_modes and not findings_file.findings. (2) When is_verify_only: skip confidence filtering/capping (no findings), skip posting inline comments, still handle fix verifications and generate score comparison. Gate passes (no new findings to fail on). (3) In _build_summary_markdown() (~line 533), when "verify_fixes" in review_modes, use title "AI Code Review — Fix Verification Only" instead of standard title. Suppress the "Findings" section when there are no findings.
+- **Files:** src/post_findings.py
 - **Tier:** standard
-- **Done when:** `ReviewJobConfig` accepts 4 new optional fields (batch_index, batch_total, file_subset, pre_built_graph); `create_findings()` filters non-code files when no `file_subset` provided; `_build_changed_files_section()` shows all files (no 100-file cap) with skipped count summary; batch mode fields are respected (file_subset bypasses pre-fetch, pre_built_graph bypasses graph build, batch_index adds context to prompt); existing tests pass.
-- **Blockers:** Task 2 (file_filter.py must exist)
+- **Done when:** verify-only mode with empty findings: no inline comments posted, fix verifications processed, summary title says "Fix Verification Only", gate passes; check-new mode: normal scoring/gating with no fix_verifications section; full mode unchanged; all 190 existing tests pass.
+- **Blockers:** Task 3
 
-#### Task 6a: Update system prompt for batched review
-- **Change:** In `src/agents/openai_runner.py`, modify `build_system_prompt()`: remove "review top 10-15 files" from both graph branch (line 45) and no-graph branch (line 51). Add new instructions: "Review ALL files in your assigned batch — do not skip files. The orchestrator has already filtered non-code files and split the PR into manageable batches." and "When get_file_diff returns is_summary=true, the diff was too large to return in full. Read the hunk summary to identify high-risk sections, then call get_file_diff again with start_line and end_line to drill into those sections."
-- **Files:** `src/agents/openai_runner.py`
-- **Tier:** cheap
-- **Done when:** System prompt no longer mentions "top 10-15 files"; includes "Review ALL files" and smart diff drill-in instructions; existing tests pass.
-- **Blockers:** None
-
-#### Task 6b: Raise truncation and timeout limits
-- **Change:** (1) In `src/agents/openai_runner.py`: raise tool result cap from 30000 to 50000 at lines 256 and 395. (2) In `src/tools/workspace_tools.py`: raise search_code output truncation from 15000 to 25000 (line 104); raise read_local_file default max_lines from 500 to 1000 (line 148). (3) In `src/graph_builder.py`: add a new tier `(100, 600)` to `_TIMEOUT_TIERS` for 51-100 file PRs, keeping 300s for <=50 files.
-- **Files:** `src/agents/openai_runner.py`, `src/tools/workspace_tools.py`, `src/graph_builder.py`
-- **Tier:** cheap
-- **Done when:** Tool result cap is 50KB in both API paths; search_code cap is 25KB; read_local_file default is 1000 lines; graph timeout for 51-100 files is 600s; existing tests pass.
-- **Blockers:** None
-
-#### VERIFY: Phase 2 — Integration
-- Run `pytest tests/` — all existing tests pass
-- Verify `get_file_diff` tool schema has `start_line`/`end_line`
-- Verify system prompt changes via inspecting `build_system_prompt()` output (Task 6a)
-- Verify raised limits: tool result 50KB, search 25KB, read 1000 lines, graph 600s (Task 6b)
-- Verify `ReviewJobConfig` accepts 4 batch fields
-- Report: tests passing, any regressions, any issues found
+#### VERIFY: Phase 2 — Conditional Behavior
+- Run pytest tests/ — all 190 existing tests pass
+- Verify prompt injection for each mode by inspecting _build_prompt() output
+- Verify write guards strip correct fields per mode
+- Verify post_findings summary title changes for verify-only
+- Report: tests passing, any regressions
 
 ---
 
-### Phase 3: Orchestrator + Entry Point (Depends on Phase 2)
+### Phase 3: Tests
 
-#### Task 7: Create BatchReviewJob orchestrator
-- **Change:** Create `src/batch_review_job.py` with class `BatchReviewJob`:
-  - `__init__` accepts pr_id, repo, workspace, model, prompt_path, vcs, settings.
-  - `run(dry_run, commit_id)` method: (1) Pre-fetch PR data once via `FetchPRDetailsActivity`. (2) Filter non-code files via `file_filter.filter_changed_files`. (3) Build graph once via `graph_builder.build_graph`. (4) If code files <= `settings.batch_size`, delegate to single-session `ReviewJob` (backward compatible shortcut). (5) Split into batches via `_split_into_batches()` using round-robin by churn descending. (6) Run each batch sequentially via `ReviewJob` with `file_subset`, `pre_built_graph`, `batch_index`, `batch_total`, and `max_turns=self.settings.batch_max_turns` set on `ReviewJobConfig` (this explicitly threads the per-batch turn budget from Settings into each batch's config). (7) Merge findings via `_merge_results()`: concatenate all findings, dedup by `(file, line, title)`, re-sequence cr-ids as `cr-001`, `cr-002`, ..., sum usage stats (input_tokens, output_tokens, duration), union review_modes. (8) Write merged `findings.json`. (9) If any batch fails, catch exception, log error, continue with remaining batches.
-  - `_split_into_batches(code_files, batch_size)`: sort by `additions + deletions` descending, round-robin distribute.
-  - `_merge_results(batch_results)`: dedup, re-sequence, sum usage.
-- **Files:** `src/batch_review_job.py` (new)
-- **Tier:** premium
-- **Done when:** `BatchReviewJob` importable; `_split_into_batches` produces balanced batches; `_merge_results` re-sequences cr-ids and deduplicates; single-session shortcut works for <= batch_size files; failed batch handling doesn't crash; full `run()` method works end-to-end with mocked dependencies.
-- **Blockers:** Tasks 2, 5 (file_filter + batch-aware ReviewJob). Risk: GraphStore reuse across batches.
-
-#### Task 8: Update run_agent.py, review prompt, and post_findings caps
-- **Change:** (1) Modify `src/run_agent.py`: import `BatchReviewJob` from `batch_review_job`; construct it with CLI args instead of direct `ReviewJobConfig`/`ReviewJob`; call `batch_job.run(dry_run, commit_id)`. BatchReviewJob auto-delegates to single ReviewJob for small PRs — backward compatible. (2) Update `commands/review-pr-core.md`: In Step 4 T4/T5 rows, replace "Focus on highest-risk paths only" with "Review ALL files in your batch"; add note "Non-code files have been pre-filtered. You will only see code files."; add in Step 5: "When get_file_diff returns is_summary, drill into suspicious hunks with start_line/end_line." (3) In `src/post_findings.py`: replace module-level `MAX_TOTAL_FINDINGS = 30` → read from `get_settings().max_total_findings` (default 50); replace `MAX_PER_FILE = 5` → read from `get_settings().max_per_file_findings` (default 5). Update `cap_findings()` calls and `_build_summary_markdown` reference to use the dynamic values.
-- **Files:** `src/run_agent.py`, `commands/review-pr-core.md`, `src/post_findings.py`
+#### Task 5: Unit tests for all new review mode behavior
+- **Change:** Create tests/unit/test_review_modes.py with these test groups: Enum tests (ReviewMode values, string comparison, all three modes exist); CLI tests (--verify-fixes parsed, --check-new-findings parsed, both-together rejected, default is FULL); BatchReviewJob tests (CHECK_NEW skips _fetch_previous_findings(), VERIFY_FIXES and FULL call it, review_mode passed to ReviewJobConfig); Prompt tests (VERIFY_FIXES prompt contains "VERIFY-ONLY MODE", CHECK_NEW contains "FRESH REVIEW MODE", FULL contains neither); Write guard tests (VERIFY_FIXES strips findings[], CHECK_NEW strips fix_verifications[], FULL preserves both); post_findings tests (verify-only mode: no inline comments, fix verifications processed, summary title correct; gate passes with zero findings in verify-only).
+- **Files:** tests/unit/test_review_modes.py (new)
 - **Tier:** standard
-- **Done when:** `run_agent.py` uses `BatchReviewJob`; prompt no longer says "highest-risk paths only" for T4/T5; prompt includes smart diff drill-in guidance; `post_findings.py` reads caps from settings; existing tests pass.
-- **Blockers:** Task 1 (Settings fields for `max_total_findings`/`max_per_file_findings`), Task 7 (BatchReviewJob must exist)
+- **Done when:** pytest tests/unit/test_review_modes.py -v passes; at least 15 test cases covering all groups above; all 190+ existing tests still pass.
+- **Blockers:** Tasks 1-4
 
-#### VERIFY: Phase 3 — Orchestrator
-- Run `pytest tests/` — all existing tests pass
-- Verify `run_agent.py` imports and uses `BatchReviewJob`
-- Verify `post_findings.py` reads caps from settings
-- Verify review prompt updated with batch and smart diff guidance
-- Report: tests passing, any regressions, any issues found
-
----
-
-### Phase 4: Tests (Depends on Phase 3)
-
-#### Task 9: Unit tests for file_filter and smart_diff
-- **Change:** Create `tests/unit/test_file_filter.py`: test `parse_skip_extensions` with standard CSV, leading-dot normalization, mixed case, whitespace, empty string; test `filter_changed_files` keeps .py/.cs/.ts/.css, skips .md/.json/.yaml/.lock/.png, skips deleted files regardless of extension, handles empty list, handles all-skipped scenario. Create `tests/unit/test_smart_diff.py`: test small diff returns `is_summarized=False`; large diff returns parsed hunks with correct add/remove counts; `extract_hunks_in_range` returns only overlapping hunks and empty for non-overlapping range; `format_summary_for_agent` output contains file path and hunk details; empty diff handled.
-- **Files:** `tests/unit/test_file_filter.py` (new), `tests/unit/test_smart_diff.py` (new)
-- **Tier:** standard
-- **Done when:** `pytest tests/unit/test_file_filter.py tests/unit/test_smart_diff.py` passes; at least 8 test cases for file_filter and 6 for smart_diff.
-- **Blockers:** Tasks 2, 3
-
-#### Task 10: Unit tests for BatchReviewJob merge logic
-- **Change:** Create `tests/unit/test_batch_review.py`: test `_split_into_batches` round-robin produces balanced batches; test `_merge_results` re-sequences cr-ids correctly (cr-001, cr-002, ...); test dedup by (file, line, title) removes duplicates across batches; test usage stats sum correctly; test single-batch shortcut for small PRs; test failed batch handling preserves other findings; test empty code files produces clean findings.
-- **Files:** `tests/unit/test_batch_review.py` (new)
-- **Tier:** standard
-- **Done when:** `pytest tests/unit/test_batch_review.py` passes; at least 7 test cases.
-- **Blockers:** Task 7
-
-#### VERIFY: Phase 4 — Tests
-- Run full `pytest tests/ -v` — all tests pass (old + new)
-- Confirm new test files exist and cover core logic
+#### VERIFY: Phase 3 — Tests
+- Run full pytest tests/ -v — all tests pass (old + new)
+- Confirm test_review_modes.py covers enum, CLI, batch, prompt, write guards, post_findings
 - Report: total test count, pass rate, any failures
 
 ---
@@ -133,18 +76,14 @@
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| GraphStore not safe for sequential reuse across batches | High — batch 2+ gets stale/corrupt graph data | Task 7 tests graph reuse explicitly; fallback: rebuild graph per batch (slower but safe) |
-| Smart diff hunk parsing breaks on unusual diff formats (binary, no-newline markers) | Med — agent gets garbled summaries | Task 3 handles edge cases; `is_summarized=False` fallback for unparseable diffs |
-| Batch findings merge produces duplicate cr-ids | Med — post_findings.py confused | Task 7 re-sequences after dedup; unit test verifies sequential IDs |
-| Raising tool result cap to 50KB causes context window overflow | Med — agent runs out of context | Monitor in testing; can lower to 40KB if needed |
-| `run_agent.py` change breaks existing pipeline | High — CI pipeline failures | BatchReviewJob delegates to ReviewJob for small PRs — backward compatible by design |
-| Round-robin splitting puts related files in different batches | Low — cross-file issues missed | Graph is shared — agent still uses `get_callers`/`get_blast_radius` across boundaries |
-| `batch_max_turns` vs `max_turns` confusion — two settings controlling turn budget | Med — per-batch turn budget silently wrong | Task 7 explicitly threads `settings.batch_max_turns` into per-batch `ReviewJobConfig.max_turns`; comment in code explains the relationship |
-| Sequential batch execution on very large PRs (500+ files, ~20 batches) takes too long | Med — review times out in CI | Log per-batch timing; parallel execution is a documented future enhancement |
-| Intra-batch context doesn't span batches — cross-file bugs split across batches may be missed | Med — false negatives on cross-file issues | Shared graph partially mitigates (agent can query `get_callers`/`get_blast_radius` across all files); round-robin distributes related high-churn files across batches to increase coverage overlap |
+| Agent ignores verify-only prompt instructions, still produces findings | Med | Defense-in-depth: _write_findings() strips findings regardless of agent output |
+| --verify-fixes with no prior findings (first push) produces empty output | Low | Log warning "no prior findings to verify", produce valid empty findings.json with note in summary |
+| 5-star score in verify-only mode is misleading | Low | Summary title makes mode explicit; comparison markdown shows fix delta |
+| review_modes list gets verify_fixes/check_new values that PRScorer.apply_mode_multipliers() doesn't recognize | Low | Scorer ignores unrecognized modes — no side effects |
+| Default behavior regression — existing pipeline breaks | High | All 190 existing tests must pass; FULL mode code paths are untouched |
 
 ## Notes
 - Each task should result in a git commit
 - Verify tasks are checkpoints — stop and report after each one
 - Base branch: main
-- Branch: feat/large-pr-batched-review
+- Branch: feat/review-modes

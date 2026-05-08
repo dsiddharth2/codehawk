@@ -1,132 +1,15 @@
 {
+  "project": "review-modes",
+  "plan_file": "PLAN.md",
+  "created": "2026-05-08",
   "tasks": [
-    {
-      "id": 1,
-      "phase": 1,
-      "title": "Add config fields to Settings",
-      "tier": "cheap",
-      "status": "completed",
-      "commit": "a0226f6"
-    },
-    {
-      "id": 2,
-      "phase": 1,
-      "title": "Create file_filter module",
-      "tier": "cheap",
-      "status": "completed",
-      "commit": "dc89ac0"
-    },
-    {
-      "id": 3,
-      "phase": 1,
-      "title": "Create smart_diff module",
-      "tier": "standard",
-      "status": "completed",
-      "commit": "fb312f9"
-    },
-    {
-      "id": "v1",
-      "phase": 1,
-      "title": "VERIFY: Phase 1 — Foundation Modules",
-      "tier": "verify",
-      "status": "completed",
-      "commit": "e4633c6",
-      "notes": "pytest could not be auto-approved in this session; modules import cleanly per code review. Pushed to origin for PM review."
-    },
-    {
-      "id": 4,
-      "phase": 2,
-      "title": "Integrate smart diff into vcs_tools.py",
-      "tier": "standard",
-      "status": "completed",
-      "commit": "c167dd8"
-    },
-    {
-      "id": 5,
-      "phase": 2,
-      "title": "Integrate filtering + batch fields into review_job.py",
-      "tier": "standard",
-      "status": "completed",
-      "commit": "5fc6996"
-    },
-    {
-      "id": "6a",
-      "phase": 2,
-      "title": "Update system prompt for batched review",
-      "tier": "cheap",
-      "status": "completed",
-      "commit": "c586d4f"
-    },
-    {
-      "id": "6b",
-      "phase": 2,
-      "title": "Raise truncation and timeout limits",
-      "tier": "cheap",
-      "status": "completed",
-      "commit": "4fc662e"
-    },
-    {
-      "id": "v2",
-      "phase": 2,
-      "title": "VERIFY: Phase 2 — Integration",
-      "tier": "verify",
-      "status": "completed",
-      "commit": "4fc662e",
-      "notes": "pytest: 136 passed, 13 skipped, 2 pre-existing failures (test_prints_diagnostic_on_failure in graph_builder, test_still_present_not_resolved_ado in post_findings — both confirmed pre-existing on main). Schema verified: get_file_diff has start_line/end_line params. Prompt verified: 'Review ALL files' + smart diff drill-in instructions. Limits verified: tool result 50KB, search 25KB, read 1000 lines, graph 600s for 51-100 files. ReviewJobConfig has batch_index, batch_total, file_subset, pre_built_graph."
-    },
-    {
-      "id": 7,
-      "phase": 3,
-      "title": "Create BatchReviewJob orchestrator",
-      "tier": "premium",
-      "status": "completed",
-      "commit": "163d932",
-      "notes": "Created src/batch_review_job.py with BatchReviewJob class. Pre-fetches PR data once, filters non-code files, builds graph once, single-session shortcut for small PRs, round-robin batch splitting by churn, sequential batch execution via ReviewJob, merge with dedup/re-sequence/sum-usage, failed batch resilience. 136 tests pass (2 pre-existing failures)."
-    },
-    {
-      "id": 8,
-      "phase": 3,
-      "title": "Update run_agent.py, review prompt, and post_findings caps",
-      "tier": "standard",
-      "status": "completed",
-      "commit": "3ca701b",
-      "notes": "run_agent.py uses BatchReviewJob. review-pr-core.md updated T4/T5 to 'Review ALL files in your batch', added smart diff drill-in guidance, added pre-filtered note. post_findings.py reads caps from settings at runtime. 136 tests pass."
-    },
-    {
-      "id": "v3",
-      "phase": 3,
-      "title": "VERIFY: Phase 3 — Orchestrator",
-      "tier": "verify",
-      "status": "completed",
-      "commit": "3ca701b",
-      "notes": "pytest: 136 passed, 13 skipped, 2 pre-existing failures (test_prints_diagnostic_on_failure in graph_builder, test_still_present_not_resolved_ado in post_findings — both confirmed pre-existing on main). Verified: run_agent.py imports BatchReviewJob, post_findings reads caps from settings (max_total_findings, max_per_file_findings), review prompt updated with 'Review ALL files in your batch', smart diff drill-in guidance, and pre-filtered note. No regressions."
-    },
-    {
-      "id": 9,
-      "phase": 4,
-      "title": "Unit tests for file_filter and smart_diff",
-      "tier": "standard",
-      "status": "completed",
-      "commit": "060af69",
-      "notes": "Created tests/unit/test_file_filter.py (17 cases) and tests/unit/test_smart_diff.py (16 cases). All 33 pass."
-    },
-    {
-      "id": 10,
-      "phase": 4,
-      "title": "Unit tests for BatchReviewJob merge logic",
-      "tier": "standard",
-      "status": "completed",
-      "commit": "a5ac73b",
-      "notes": "Created tests/unit/test_batch_review.py (15 cases). All 15 pass."
-    },
-    {
-      "id": "v4",
-      "phase": 4,
-      "title": "VERIFY: Phase 4 — Tests",
-      "tier": "verify",
-      "status": "completed",
-      "commit": "a5ac73b",
-      "notes": "Full pytest: 184 passed, 13 skipped, 2 pre-existing failures (unchanged). New test count: +48 tests across 3 new files. Pass rate 184/186 (99%). Both failures confirmed pre-existing on main."
-    }
+    {"id": 1, "step": "Add ReviewMode enum and thread through config", "type": "work", "status": "completed", "tier": "cheap", "commit": "ae22b01", "notes": "ReviewMode enum added to review_models.py; review_mode field added to ReviewJobConfig; review_mode param added to BatchReviewJob.__init__; 190 unit tests pass"},
+    {"id": 2, "step": "Add CLI flags and thread review_mode through BatchReviewJob", "type": "work", "status": "completed", "tier": "standard", "commit": "a4fcbc5", "notes": "--verify-fixes and --check-new-findings are mutually exclusive; resolve to ReviewMode; CHECK_NEW skips _fetch_previous_findings(); review_mode passed to both ReviewJobConfig constructors; 190 unit tests pass"},
+    {"id": 3, "step": "VERIFY: Phase 1 — Foundation", "type": "verify", "status": "completed", "commit": "a4fcbc5", "notes": "203/203 tests pass (190 unit + 13 integration); ReviewMode enum imports correctly; --verify-fixes and --check-new-findings appear in --help as mutually exclusive group; review_mode threads through BatchReviewJob to ReviewJobConfig"},
+    {"id": 4, "step": "ReviewJob mode-specific prompt injection and write guards", "type": "work", "status": "completed", "tier": "standard", "commit": "daaf7a0", "notes": "CHECK_NEW guard wraps standalone prior-findings fetch; _build_verify_only_instructions() and _build_check_new_instructions() added; _write_findings() strips findings[] for VERIFY_FIXES and fix_verifications[] for CHECK_NEW; review_modes list stamped with mode string; 203/203 tests pass"},
+    {"id": 5, "step": "post_findings.py mode-aware summary and gating", "type": "work", "status": "completed", "tier": "standard", "commit": "88ba054", "notes": "is_verify_only detection added; confidence filter/cap/inline comment posting skipped for verify-only; gate always passes for verify-only; fix verifications still processed; _build_summary_markdown title is 'Fix Verification Only' for verify-only; Findings section suppressed when verify-only; 203/203 tests pass"},
+    {"id": 6, "step": "VERIFY: Phase 2 — Conditional Behavior", "type": "verify", "status": "completed", "commit": "88ba054", "notes": "203/203 tests pass; VERIFY_FIXES mode: prompt contains 'VERIFY-ONLY MODE', _write_findings strips findings[] to empty and stamps verify_fixes in review_modes; CHECK_NEW mode: prompt contains 'FRESH REVIEW MODE', prior-findings fetch skipped, _write_findings strips fix_verifications[]; post_findings verify-only: no inline comments, fix verifications processed, gate passes, summary title 'Fix Verification Only'; pushed to origin"},
+    {"id": 7, "step": "Unit tests for all new review mode behavior", "type": "work", "status": "completed", "tier": "standard", "commit": "", "notes": "Created tests/unit/test_review_modes.py with 31 test cases across 6 groups: enum (7), CLI (4), BatchReviewJob (4), prompt injection (5), write guards (6), post_findings verify-only (5); 234/234 tests pass"},
+    {"id": 8, "step": "VERIFY: Phase 3 — Tests", "type": "verify", "status": "pending", "commit": "", "notes": ""}
   ]
 }
