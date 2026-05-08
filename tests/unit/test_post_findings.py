@@ -302,6 +302,7 @@ class TestDryRunEndToEnd:
             "repo": "Org/Repo",
             "vcs": "ado",
             "review_modes": ["standard"],
+            "summary": "Test summary.",
             "findings": [
                 {
                     "id": "cr-001",
@@ -312,6 +313,7 @@ class TestDryRunEndToEnd:
                     "title": "t",
                     "message": "m",
                     "confidence": 0.9,
+                    "suggestion": None,
                 }
             ],
         }
@@ -330,6 +332,7 @@ class TestDryRunEndToEnd:
             "repo": "Org/Repo",
             "vcs": "ado",
             "review_modes": ["standard"],
+            "summary": "Test summary.",
             "findings": [],
             "fix_verifications": [
                 {"cr_id": "cr-001", "status": "fixed", "reason": "Issue resolved"},
@@ -372,6 +375,7 @@ class TestFixVerification:
             "repo": "Org/Repo",
             "vcs": vcs,
             "review_modes": ["standard"],
+            "summary": "Test summary.",
             "findings": [],
             "fix_verifications": fix_verifications,
         }
@@ -461,6 +465,7 @@ class TestFixVerification:
             "repo": "Org/Repo",
             "vcs": "ado",
             "review_modes": ["standard"],
+            "summary": "Test summary.",
             "findings": [],
         }
         path = tmp_path / "findings.json"
@@ -644,6 +649,7 @@ class TestGitHubPath:
             "repo": "org/myrepo",
             "vcs": "github",
             "review_modes": ["standard"],
+            "summary": "Test summary.",
             "findings": [
                 {
                     "id": "cr-001",
@@ -654,6 +660,7 @@ class TestGitHubPath:
                     "title": "Magic number",
                     "message": "Use a named constant",
                     "confidence": 0.85,
+                    "suggestion": None,
                 }
             ],
         }
@@ -671,6 +678,7 @@ class TestGitHubPath:
             "repo": "org/repo",
             "vcs": "github",
             "review_modes": ["standard"],
+            "summary": "Test summary.",
             "findings": [],
         }
         path = tmp_path / "findings.json"
@@ -732,7 +740,7 @@ class TestUsageInOutput:
     def test_usage_present_when_in_findings(self, tmp_path):
         data = {
             "pr_id": 1, "repo": "R", "vcs": "ado",
-            "review_modes": ["standard"], "findings": [],
+            "review_modes": ["standard"], "summary": "Test summary.", "findings": [],
             "usage": {
                 "input_tokens": 15000, "output_tokens": 3200,
                 "total_tokens": 18200, "model": "o3",
@@ -751,7 +759,7 @@ class TestUsageInOutput:
     def test_no_usage_produces_null(self, tmp_path):
         data = {
             "pr_id": 1, "repo": "R", "vcs": "ado",
-            "review_modes": ["standard"], "findings": [],
+            "review_modes": ["standard"], "summary": "Test summary.", "findings": [],
         }
         path = tmp_path / "findings.json"
         path.write_text(json.dumps(data))
@@ -762,7 +770,7 @@ class TestUsageInOutput:
     def test_usage_with_unknown_model(self, tmp_path):
         data = {
             "pr_id": 1, "repo": "R", "vcs": "ado",
-            "review_modes": ["standard"], "findings": [],
+            "review_modes": ["standard"], "summary": "Test summary.", "findings": [],
             "usage": {
                 "input_tokens": 5000, "output_tokens": 1000,
                 "total_tokens": 6000, "model": "some-new-model",
@@ -784,7 +792,7 @@ class TestUsageInSummaryMarkdown:
         usage = Usage(input_tokens=10000, output_tokens=2000, total_tokens=12000, model="o3", duration_seconds=30.0)
         cost = {"model": "o3", "input_cost_usd": 0.02, "output_cost_usd": 0.016, "total_cost_usd": 0.036}
         md = pf._build_summary_markdown(
-            findings_file=MagicMock(pr_id=1, repo="R", review_modes=["standard"]),
+            findings_file=MagicMock(pr_id=1, repo="R", review_modes=["standard"], summary=None),
             filtered_findings=[],
             score=None,
             gate_result={"passed": True, "reasons": []},
@@ -798,7 +806,7 @@ class TestUsageInSummaryMarkdown:
 
     def test_summary_no_usage_section_when_absent(self):
         md = pf._build_summary_markdown(
-            findings_file=MagicMock(pr_id=1, repo="R", review_modes=["standard"]),
+            findings_file=MagicMock(pr_id=1, repo="R", review_modes=["standard"], summary=None),
             filtered_findings=[],
             score=None,
             gate_result={"passed": True, "reasons": []},
@@ -809,7 +817,7 @@ class TestUsageInSummaryMarkdown:
     def test_summary_shows_duration(self):
         usage = Usage(input_tokens=5000, output_tokens=1000, total_tokens=6000, model="o3", duration_seconds=12.5)
         md = pf._build_summary_markdown(
-            findings_file=MagicMock(pr_id=1, repo="R", review_modes=["standard"]),
+            findings_file=MagicMock(pr_id=1, repo="R", review_modes=["standard"], summary=None),
             filtered_findings=[],
             score=None,
             gate_result={"passed": True, "reasons": []},

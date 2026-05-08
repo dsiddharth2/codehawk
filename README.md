@@ -1,5 +1,12 @@
 # CodeHawk
 
+[![CI](https://github.com/dsiddharth2/codehawk/actions/workflows/ci.yml/badge.svg)](https://github.com/dsiddharth2/codehawk/actions/workflows/ci.yml)
+[![Docker](https://github.com/dsiddharth2/codehawk/actions/workflows/publish-docker.yml/badge.svg)](https://github.com/dsiddharth2/codehawk/actions/workflows/publish-docker.yml)
+[![Docker Pulls](https://img.shields.io/docker/pulls/dsiddharth2/codehawk)](https://hub.docker.com/r/dsiddharth2/codehawk)
+[![Docker Image Size](https://img.shields.io/docker/image-size/dsiddharth2/codehawk/latest)](https://hub.docker.com/r/dsiddharth2/codehawk)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-yellow.svg)](https://www.python.org/downloads/)
+
 An AI-powered pull request review pipeline that runs in CI, produces structured findings, scores code quality, and posts inline comments to Azure DevOps or GitHub — automatically.
 
 ---

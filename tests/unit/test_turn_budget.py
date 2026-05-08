@@ -139,8 +139,8 @@ class TestBuildSystemPrompt:
 
     def test_graph_first_strategy_when_has_graph(self):
         prompt = build_system_prompt(40, has_graph=True)
-        assert "FIRST tool call MUST be `get_change_analysis`" in prompt
-        assert "Do NOT read files one-by-one" in prompt
+        assert "pre-computed" in prompt.lower() or "Pre-computed" in prompt or "pre-fetched" in prompt.lower()
+        assert "Do NOT call `get_change_analysis`" in prompt
 
     def test_no_graph_instructs_diffs(self):
         prompt = build_system_prompt(40, has_graph=False)

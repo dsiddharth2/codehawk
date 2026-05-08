@@ -24,6 +24,7 @@ SAMPLE_FINDINGS_RAW = {
     "repo": "MyOrg/MyRepo",
     "vcs": "ado",
     "review_modes": ["standard", "security"],
+    "summary": "Test summary for sample findings.",
     "tool_calls": 12,
     "agent": "codex",
     "findings": [

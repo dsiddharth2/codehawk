@@ -86,12 +86,11 @@ class TestBuildGraph:
 
         assert result is mock_store
 
-    def test_prints_diagnostic_on_failure(self, mocker, capsys):
+    def test_prints_diagnostic_on_failure(self, mocker, caplog):
         mocker.patch("config.get_settings", return_value=_mock_settings())
 
         failing_build = MagicMock(side_effect=RuntimeError("workspace parse error"))
         with patch.dict(sys.modules, _crg_sys_modules(build_fn=failing_build)):
             graph_builder.build_graph(Path("/workspace"))
 
-        captured = capsys.readouterr()
-        assert "Graph build skipped" in captured.out
+        assert "Graph build skipped" in caplog.text
