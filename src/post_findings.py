@@ -550,10 +550,20 @@ def _build_summary_markdown(
         severity_counts[f.severity] = severity_counts.get(f.severity, 0) + 1
         category_counts[f.category] = category_counts.get(f.category, 0) + 1
 
+    review_modes = getattr(findings_file, "review_modes", [])
+    is_verify_only = "verify_fixes" in review_modes and not filtered_findings
     is_rereview = bool(fix_verifications)
+
+    if is_verify_only:
+        title = "# 🔍 AI Code Review — Fix Verification Only"
+    elif is_rereview:
+        title = "# 🔄 AI Code Re-Review — Fix Verification"
+    else:
+        title = "# 🤖 AI Code Review"
+
     lines = [
         "<!-- codehawk-summary -->",
-        "# 🔄 AI Code Re-Review — Fix Verification" if is_rereview else "# 🤖 AI Code Review",
+        title,
     ]
 
     if is_rereview:
@@ -702,8 +712,8 @@ def _build_summary_markdown(
             "",
         ]
 
-    # Findings list
-    if filtered_findings:
+    # Findings list (suppressed when verify-only or when there are no findings)
+    if filtered_findings and not is_verify_only:
         lines += ["## 🔍 Findings"]
         for f in filtered_findings:
             sev_icon = {"critical": "🔴", "warning": "⚠️", "suggestion": "💡"}.get(f.severity, "📝")
@@ -802,11 +812,18 @@ def run(
 
     findings_file = _parse_findings_file(raw)
 
-    # 2. Filter by confidence
-    after_confidence = filter_by_confidence(findings_file.findings, MIN_CONFIDENCE)
-    filtered_count = len(findings_file.findings) - len(after_confidence)
+    # 2. Detect verify-only mode
+    is_verify_only = "verify_fixes" in findings_file.review_modes and not findings_file.findings
 
-    # 3. Apply mode multipliers (adjusts severity for scoring)
+    # 3. Filter by confidence (skip for verify-only — no findings to filter)
+    if is_verify_only:
+        after_confidence = []
+        filtered_count = 0
+    else:
+        after_confidence = filter_by_confidence(findings_file.findings, MIN_CONFIDENCE)
+        filtered_count = len(findings_file.findings) - len(after_confidence)
+
+    # 4. Apply mode multipliers (adjusts severity for scoring)
     from pr_scorer import PRScorer
     from config import get_settings
 
@@ -828,55 +845,59 @@ def run(
 
     scorer = PRScorer(penalty_matrix=penalty_matrix, star_thresholds=star_thresholds)
 
-    # 4. Cap findings (read limits from settings when available)
+    # 5. Cap findings (read limits from settings when available; skip for verify-only)
     max_total = settings.max_total_findings if settings else MAX_TOTAL_FINDINGS
     max_per_file = settings.max_per_file_findings if settings else MAX_PER_FILE
-    capped = cap_findings(after_confidence, max_total, max_per_file)
+    capped = [] if is_verify_only else cap_findings(after_confidence, max_total, max_per_file)
 
-    # 5. Fetch existing cr-ids for dedup
+    # 6. Fetch existing cr-ids for dedup (skip for verify-only — no new comments to post)
     vcs = findings_file.vcs
     repo = findings_file.repo
     pr_id = findings_file.pr_id
 
-    if dry_run:
+    if is_verify_only or dry_run:
         posted_cr_ids: Set[str] = set()
     elif vcs == "ado":
         posted_cr_ids = _fetch_posted_cr_ids_ado(pr_id, repo)
     else:
         posted_cr_ids = _fetch_posted_cr_ids_github(pr_id, repo)
 
-    # 6. Dedup: skip already-posted cr-ids
+    # 7. Dedup: skip already-posted cr-ids
     new_findings = [f for f in capped if f.id not in posted_cr_ids]
     deduped_count = len(capped) - len(new_findings)
 
-    # 7. Score (use mode-adjusted findings)
+    # 8. Score (use mode-adjusted findings)
     all_adjusted = scorer.apply_mode_multipliers(capped, findings_file.review_modes)
     score = scorer.calculate_pr_score(all_adjusted)
 
-    # 8. Post inline comments
+    # 9. Post inline comments (skip entirely for verify-only)
     posted_count = 0
     post_errors = []
-    for finding in new_findings:
-        if vcs == "ado":
-            ok = _post_inline_ado(finding, pr_id, repo, dry_run)
-        else:
-            ok = _post_inline_github(finding, pr_id, repo, commit_id, dry_run)
+    if not is_verify_only:
+        for finding in new_findings:
+            if vcs == "ado":
+                ok = _post_inline_ado(finding, pr_id, repo, dry_run)
+            else:
+                ok = _post_inline_github(finding, pr_id, repo, commit_id, dry_run)
 
-        if ok:
-            posted_count += 1
-        else:
-            post_errors.append(finding.id)
+            if ok:
+                posted_count += 1
+            else:
+                post_errors.append(finding.id)
 
-    # 9. Handle fix verifications
+    # 10. Handle fix verifications
     if findings_file.fix_verifications:
         if vcs == "ado":
             _handle_fix_verifications_ado(findings_file.fix_verifications, pr_id, repo, dry_run)
         else:
             _handle_fix_verifications_github(findings_file.fix_verifications, pr_id, repo, dry_run)
 
-    # 10. Gate evaluation from .codereview.yml (use mode-adjusted severity for consistency with score)
+    # 11. Gate evaluation from .codereview.yml (verify-only always passes — no new findings)
     gate_config = _load_codereview_yml(workspace)
-    gate_result = _evaluate_gate(score, all_adjusted, gate_config)
+    if is_verify_only:
+        gate_result = {"passed": True, "reasons": []}
+    else:
+        gate_result = _evaluate_gate(score, all_adjusted, gate_config)
 
     # 11. Generate score comparison markdown when fix verifications are present
     comparison_md = ""
