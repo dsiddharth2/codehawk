@@ -4,7 +4,7 @@
   "title": "FindingsFile",
   "description": "Contract for findings.json written by the review agent (Phase 1) and consumed by post_findings.py (Phase 2).",
   "type": "object",
-  "required": ["pr_id", "repo", "vcs", "review_modes", "findings"],
+  "required": ["pr_id", "repo", "vcs", "review_modes", "summary", "findings"],
   "additionalProperties": false,
   "properties": {
     "pr_id": {

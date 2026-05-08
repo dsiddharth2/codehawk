@@ -282,6 +282,7 @@ class BatchReviewJob:
         - Union review_modes
         """
         all_findings = []
+        batch_summaries = []
         total_input_tokens = 0
         total_output_tokens = 0
         total_duration = 0.0
@@ -290,6 +291,8 @@ class BatchReviewJob:
 
         for result in batch_results:
             all_findings.extend(result.get("findings", []))
+            if result.get("summary"):
+                batch_summaries.append(result["summary"].strip())
 
             usage = result.get("usage", {})
             total_input_tokens += usage.get("input_tokens", 0)
@@ -327,6 +330,9 @@ class BatchReviewJob:
 
         if review_modes:
             merged["review_modes"] = sorted(review_modes)
+
+        if batch_summaries:
+            merged["summary"] = "\n\n".join(batch_summaries)
 
         all_fix_verifications = []
         for result in batch_results:
