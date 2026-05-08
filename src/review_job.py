@@ -27,6 +27,7 @@ from typing import Any, Dict, Optional
 
 from agents.openai_runner import AgentResult, OpenAIAgentRunner
 from config import Settings, get_settings
+from models.review_models import ReviewMode
 from smart_diff import summarize_diff, format_summary_for_agent
 
 logger = logging.getLogger("codehawk.review_job")
@@ -58,6 +59,7 @@ class ReviewJobConfig:
     source_commit_id: str = ""
     target_commit_id: str = ""
     previous_findings: Optional[list] = None
+    review_mode: ReviewMode = ReviewMode.FULL
 
     def __post_init__(self):
         self.workspace = Path(self.workspace)

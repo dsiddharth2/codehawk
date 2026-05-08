@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from config import Settings, get_settings
 from file_filter import filter_changed_files, parse_skip_extensions
+from models.review_models import ReviewMode
 from review_job import ReviewJob, ReviewJobConfig
 
 logger = logging.getLogger("codehawk.batch_review")
@@ -36,6 +37,7 @@ class BatchReviewJob:
         prompt_path: Optional[Path] = None,
         vcs: str = "ado",
         settings: Optional[Settings] = None,
+        review_mode: ReviewMode = ReviewMode.FULL,
     ):
         self.pr_id = pr_id
         self.repo = repo
@@ -44,6 +46,7 @@ class BatchReviewJob:
         self.prompt_path = prompt_path
         self.vcs = vcs
         self.settings = settings or get_settings()
+        self.review_mode = review_mode
 
     def run(self, dry_run: bool = False, commit_id: str = "") -> Dict[str, Any]:
         """Run the full batched review pipeline.

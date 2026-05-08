@@ -4,8 +4,16 @@ Review data models.
 Dataclasses representing code review results, comments, findings, and scores.
 """
 
+from enum import Enum
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
+
+
+class ReviewMode(str, Enum):
+    """Controls which phase(s) of the review pipeline are active."""
+    FULL = "full"
+    VERIFY_FIXES = "verify_fixes"
+    CHECK_NEW = "check_new"
 
 
 # ============================================================================
