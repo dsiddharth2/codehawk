@@ -9,10 +9,12 @@ import json
 import sys
 from pathlib import Path
 
+from utils.logger import setup_logger
 from batch_review_job import BatchReviewJob
 
 
 def main():
+    setup_logger("codehawk")
     parser = argparse.ArgumentParser(
         prog="run_agent.py",
         description="codehawk — run the full review pipeline (Phase 1 + Phase 2)",

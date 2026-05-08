@@ -25,6 +25,10 @@
       "items": { "type": "string" },
       "description": "Active review modes, e.g. [\"standard\", \"security\"]"
     },
+    "summary": {
+      "type": "string",
+      "description": "Narrative overview for manual reviewers: what the PR does, architecture/design decisions, how the code works, dependencies affected, testing coverage, and key concerns or praise. 4-8 sentences."
+    },
     "findings": {
       "type": "array",
       "description": "List of code review findings",
