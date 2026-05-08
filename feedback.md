@@ -46,3 +46,67 @@
 ## Summary
 
 Phase 1 is correctly implemented. The `ReviewMode` enum is well-structured, properly threaded through config and CLI, flags are mutually exclusive, and CHECK_NEW mode correctly skips previous findings fetch in the batch orchestrator. All 190 existing tests pass with no regressions. Ready to proceed to Phase 2.
+
+---
+
+# Review Modes — Phase 2 Code Review
+
+**Reviewer:** local-codehawk-reviewer
+**Date:** 2026-05-08
+**Verdict:** APPROVED
+
+> Phase 2: Conditional Behavior — Prompt, Write Guards, Post-Findings
+
+---
+
+## Checklist
+
+| Item | Status | Notes |
+|------|--------|-------|
+| create_findings() skips prior-findings fetch for CHECK_NEW | PASS | `review_job.py:89` — condition `self.config.review_mode != ReviewMode.CHECK_NEW` guards the standalone fetch path |
+| _build_prompt() injects VERIFY_FIXES instructions | PASS | `review_job.py:450-451` — appends `_build_verify_only_instructions()` containing "VERIFY-ONLY MODE" |
+| _build_prompt() injects CHECK_NEW instructions | PASS | `review_job.py:452-453` — appends `_build_check_new_instructions()` containing "FRESH REVIEW MODE" |
+| _build_verify_only_instructions() clear and forceful | PASS | Lines 368-378 — explicit constraints: findings[] MUST be empty, populate fix_verifications[], skip Steps 3-5 |
+| _build_check_new_instructions() clear and forceful | PASS | Lines 380-389 — explicit constraints: fix_verifications[] MUST be empty, skip Step 6, no prior findings |
+| _write_findings() strips findings[] for VERIFY_FIXES | PASS | `review_job.py:541-544` — forces `data["findings"] = []` and appends `"verify_fixes"` to review_modes |
+| _write_findings() strips fix_verifications[] for CHECK_NEW | PASS | `review_job.py:545-548` — forces `data["fix_verifications"] = []` and appends `"check_new"` to review_modes |
+| post_findings detects verify-only mode | PASS | `post_findings.py:816` — `is_verify_only = "verify_fixes" in review_modes and not findings_file.findings` |
+| Verify-only skips inline comments | PASS | `post_findings.py:876` — entire inline posting loop guarded by `if not is_verify_only` |
+| Verify-only still processes fix verifications | PASS | `post_findings.py:888-893` — fix verification handling is unconditional, not gated by is_verify_only |
+| Summary title "Fix Verification Only" for verify-only | PASS | `post_findings.py:557-558` — title set to "AI Code Review — Fix Verification Only" |
+| Gate passes for verify-only (no new findings) | PASS | `post_findings.py:897-898` — hard-coded `{"passed": True, "reasons": []}` |
+| FULL mode behavior completely unchanged | PASS | All mode-conditional code uses explicit VERIFY_FIXES/CHECK_NEW checks; FULL falls through to existing paths |
+| Confidence filtering skipped for verify-only | PASS | `post_findings.py:819-821` — short-circuits to empty list |
+| Capping skipped for verify-only | PASS | `post_findings.py:851` — ternary sets capped to `[]` |
+| CR-ID dedup fetch skipped for verify-only | PASS | `post_findings.py:858` — `is_verify_only or dry_run` produces empty set |
+| Findings section suppressed in summary for verify-only | PASS | `post_findings.py:716` — `if filtered_findings and not is_verify_only` |
+| Phase 1 not regressed | PASS | Phase 1 files (review_models.py, run_agent.py, batch_review_job.py) untouched in Phase 2 commits |
+| All existing tests pass | PASS | 190 passed, 13 skipped (identical to baseline) |
+
+---
+
+## Code Quality Notes
+
+1. **create_findings() guard** (`review_job.py:89`): Clean single-line condition addition. The `CHECK_NEW` guard at both the `BatchReviewJob` level (Phase 1) and the standalone `ReviewJob` level (Phase 2) provides complete coverage — addresses the Phase 1 observation.
+
+2. **Prompt injection** (`review_job.py:450-453`): Mode instructions are appended after `previous_findings` section and before config section, which is the correct position — the agent sees mode constraints immediately after the prior findings table. Both instruction methods use bold headers and imperative language.
+
+3. **Defense-in-depth** (`review_job.py:539-548`): `setdefault` for review_modes is defensive against missing keys. Strips the correct field for each mode and ensures the mode tag is present in review_modes for downstream consumers (post_findings).
+
+4. **post_findings verify-only detection** (`post_findings.py:816`): Uses `not findings_file.findings` rather than checking review_modes alone — this means a VERIFY_FIXES run where the agent somehow produced findings (before write guards strip them) would still be detected correctly by the double condition. Good defensive design.
+
+5. **Gate bypass** (`post_findings.py:897-898`): Hard-coded pass is correct — verify-only runs have no findings to gate on. The gate still loads .codereview.yml (line 896) which is slightly wasteful but harmless.
+
+---
+
+## Observations (non-blocking)
+
+1. **Duplicate step number comment** (`post_findings.py:895,902`): Steps 11 and 12 in the `run()` function both start at `# 11.` after the Phase 2 renumbering. The second `# 11` (line 902) should be `# 12`. Cosmetic only — no logic impact.
+
+2. **Scoring still runs for verify-only** (`post_findings.py:870-871`): `apply_mode_multipliers` and `calculate_pr_score` run on the empty `capped` list, producing a perfect 5-star score. This is correct behavior (no penalty deductions = best score), but the score is somewhat meaningless for verify-only runs. The summary title already disambiguates this for users.
+
+---
+
+## Summary
+
+Phase 2 is correctly implemented. All three components — prompt injection, write guards, and post_findings mode awareness — work together as a defense-in-depth chain: the prompt tells the agent what to do, write guards enforce it regardless of agent compliance, and post_findings adapts its behavior to the resulting mode-tagged findings file. FULL mode code paths are untouched. All 190 existing tests pass with no regressions. Ready to proceed to Phase 3 (tests).
