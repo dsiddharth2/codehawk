@@ -28,7 +28,6 @@ if [[ "$VCS" != "ado" && "$VCS" != "github" ]]; then
 fi
 
 OPENAI_MODEL="${OPENAI_MODEL:-o3}"
-MAX_TURNS="${MAX_TURNS:-40}"
 DRY_RUN_FLAG="${DRY_RUN:+--dry-run}"
 
 echo "==> codehawk: PR=$PR_ID REPO=$REPO VCS=$VCS MODEL=$OPENAI_MODEL"
@@ -38,7 +37,6 @@ python3 /app/src/run_agent.py \
     --repo "$REPO" \
     --workspace /workspace \
     --model "$OPENAI_MODEL" \
-    --max-turns "$MAX_TURNS" \
     --prompt-file /app/commands/review-pr-core.md \
     --commit-id "${COMMIT_ID:-}" \
     ${DRY_RUN_FLAG:-}
