@@ -55,7 +55,8 @@ def _make_finding(file: str, line: int, title: str, severity: str = "warning") -
 
 def _make_batch_result(findings: List[Dict], input_tokens: int = 100,
                        output_tokens: int = 50, duration: float = 10.0,
-                       model: str = "o3", review_mode: str = "") -> Dict[str, Any]:
+                       model: str = "o3", review_mode: str = "",
+                       summary: str = "") -> Dict[str, Any]:
     result = {
         "findings": findings,
         "usage": {
@@ -67,6 +68,8 @@ def _make_batch_result(findings: List[Dict], input_tokens: int = 100,
     }
     if review_mode:
         result["review_mode"] = review_mode
+    if summary:
+        result["summary"] = summary
     return result
 
 
@@ -206,3 +209,23 @@ class TestMergeResults:
         # All cr-ids are sequential
         for i, f in enumerate(merged["findings"], start=1):
             assert f["id"] == f"cr-{i:03d}"
+
+    def test_summaries_merged_from_batches(self):
+        batch1 = _make_batch_result([], summary="Batch 1 has security issues.")
+        batch2 = _make_batch_result([], summary="Batch 2 refactors the auth module.")
+        merged = BatchReviewJob._merge_results([batch1, batch2])
+        assert "summary" in merged
+        assert "Batch 1 has security issues." in merged["summary"]
+        assert "Batch 2 refactors the auth module." in merged["summary"]
+
+    def test_no_summary_when_batches_lack_summary(self):
+        batch1 = _make_batch_result([])
+        batch2 = _make_batch_result([])
+        merged = BatchReviewJob._merge_results([batch1, batch2])
+        assert "summary" not in merged
+
+    def test_summary_skips_empty_batch_summaries(self):
+        batch1 = _make_batch_result([], summary="Only this batch has a summary.")
+        batch2 = _make_batch_result([])
+        merged = BatchReviewJob._merge_results([batch1, batch2])
+        assert merged["summary"] == "Only this batch has a summary."
