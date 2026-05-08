@@ -25,6 +25,7 @@ def _write_findings(tmp_path, findings, fix_verifications=None, review_modes=Non
         "repo": REPO,
         "vcs": "ado",
         "review_modes": review_modes or ["standard"],
+        "summary": "Test summary.",
         "tool_calls": len(findings),
         "agent": "codex",
         "findings": findings,

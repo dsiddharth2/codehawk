@@ -67,7 +67,7 @@ def _make_batch_result(findings: List[Dict], input_tokens: int = 100,
         },
     }
     if review_mode:
-        result["review_mode"] = review_mode
+        result["review_modes"] = [review_mode]
     if summary:
         result["summary"] = summary
     return result

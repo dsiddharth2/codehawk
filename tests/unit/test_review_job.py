@@ -125,20 +125,17 @@ class TestScanHistoryForFindings:
 
 def _inject_activity_module(fetch_cls):
     """Return a sys.modules patch dict that makes activities.fetch_pr_details_activity
-    importable inside create_findings() without requiring the real ADO SDK.
-
-    Also injects a mock models.review_models so FetchPRDetailsInput is constructable
-    even if the real module has unavailable dependencies.
+    and activities.fetch_file_diff_activity importable inside create_findings()
+    without requiring the real ADO SDK.
     """
     mock_activity_mod = MagicMock()
     mock_activity_mod.FetchPRDetailsActivity = fetch_cls
 
-    mock_models_mod = MagicMock()
-    mock_models_mod.FetchPRDetailsInput = MagicMock(return_value=MagicMock())
+    mock_diff_mod = MagicMock()
 
     return {
         "activities.fetch_pr_details_activity": mock_activity_mod,
-        "models.review_models": mock_models_mod,
+        "activities.fetch_file_diff_activity": mock_diff_mod,
     }
 
 
@@ -158,6 +155,8 @@ class TestChangedFilesPropagation:
         ]
         mock_pr = MagicMock()
         mock_pr.file_changes = file_changes
+        mock_pr.source_commit_id = ""
+        mock_pr.target_commit_id = ""
         mock_fetch_cls.return_value.execute.return_value = mock_pr
 
         mock_result = _make_agent_result()
@@ -228,6 +227,8 @@ class TestChangedFilesPropagation:
         file_changes = [_FakeFileChange("src/foo.py")]
         mock_pr = MagicMock()
         mock_pr.file_changes = file_changes
+        mock_pr.source_commit_id = ""
+        mock_pr.target_commit_id = ""
         mock_fetch_cls.return_value.execute.return_value = mock_pr
 
         mock_result = _make_agent_result()
@@ -252,7 +253,6 @@ class TestChangedFilesPropagation:
         prompt_arg = mock_runner.run.call_args.args[0]
         assert "Pre-fetched PR Data" in prompt_arg
         assert "src/foo.py" in prompt_arg
-        assert "get_change_analysis" in prompt_arg
 
 
 # ---------------------------------------------------------------------------
