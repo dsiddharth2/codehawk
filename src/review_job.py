@@ -86,7 +86,7 @@ class ReviewJob:
 
     def create_findings(self) -> Path:
         """Run the agent and write findings.json. Returns the path."""
-        if self.config.previous_findings is None:
+        if self.config.review_mode != ReviewMode.CHECK_NEW and self.config.previous_findings is None:
             try:
                 from activities.fetch_pr_comments_activity import FetchPRCommentsActivity
                 activity = FetchPRCommentsActivity(self.settings)
@@ -365,6 +365,29 @@ class ReviewJob:
     # Internals
     # ------------------------------------------------------------------
 
+    def _build_verify_only_instructions(self) -> str:
+        return (
+            "\n\n---\n\n"
+            "## VERIFY-ONLY MODE\n\n"
+            "**This is a fix-verification run. You MUST follow these constraints:**\n\n"
+            "- ONLY verify prior findings listed in the table above\n"
+            "- `findings[]` MUST be empty — do NOT add new findings\n"
+            "- Populate `fix_verifications[]` for EVERY cr_id in the table above\n"
+            "- Skip Steps 3-5 of the standard review process\n"
+            "- Each `fix_verifications` entry requires: `cr_id`, `status` (fixed/still_present/not_relevant), `reason`\n"
+        )
+
+    def _build_check_new_instructions(self) -> str:
+        return (
+            "\n\n---\n\n"
+            "## FRESH REVIEW MODE\n\n"
+            "**This is a fresh-review run. You MUST follow these constraints:**\n\n"
+            "- There are no prior findings to verify\n"
+            "- `fix_verifications[]` MUST be empty\n"
+            "- Skip Step 6 (fix verification) of the standard review process\n"
+            "- Focus entirely on identifying new code issues in the changed files\n"
+        )
+
     def _build_previous_findings_section(self, previous_findings: list) -> str:
         capped = previous_findings[:30]
         lines = [
@@ -423,6 +446,11 @@ class ReviewJob:
 
         if self.config.previous_findings:
             text += self._build_previous_findings_section(self.config.previous_findings)
+
+        if self.config.review_mode == ReviewMode.VERIFY_FIXES:
+            text += self._build_verify_only_instructions()
+        elif self.config.review_mode == ReviewMode.CHECK_NEW:
+            text += self._build_check_new_instructions()
 
         text += self._build_config_section()
 
@@ -507,6 +535,18 @@ class ReviewJob:
         data["pr_id"] = self.config.pr_id
         data["repo"] = self.config.repo
         data["vcs"] = self.config.vcs
+
+        # Defense-in-depth mode guards: strip fields the agent should not have populated
+        review_modes = data.setdefault("review_modes", [])
+        if self.config.review_mode == ReviewMode.VERIFY_FIXES:
+            data["findings"] = []
+            if "verify_fixes" not in review_modes:
+                review_modes.append("verify_fixes")
+        elif self.config.review_mode == ReviewMode.CHECK_NEW:
+            data["fix_verifications"] = []
+            if "check_new" not in review_modes:
+                review_modes.append("check_new")
+
         self._findings_path.parent.mkdir(parents=True, exist_ok=True)
         self._findings_path.write_text(
             json.dumps(data, indent=2), encoding="utf-8"
