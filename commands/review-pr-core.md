@@ -103,6 +103,17 @@ For T4/T5, prioritize files in this order:
 3. Entry points (API handlers, CLI commands, route definitions)
 4. Skip test files, generated code, and lock files
 
+**100% coverage is required regardless of tier.** Every code file in your batch must be reviewed. You must either produce a finding for a file or list it in `files_clean[]` in findings.json. Files that appear in neither are considered skipped — skipped files fail the CI gate.
+
+**Within your tier strategy, depth per file is determined by risk tier** (shown in the pre-computed risk table):
+- **HIGH risk** — Full review. Read the full file via `read_local_file` before flagging. Check callers via `get_callers`. Verify CRITICAL findings against full context. Spend multiple turns if needed.
+- **MEDIUM risk** — Review from the pre-injected diff. Flag obvious issues. Use `read_local_file` only if something looks wrong but you need more context.
+- **LOW risk** — Scan the diff for security issues and critical bugs only. If nothing critical, add to `files_clean[]` and move on.
+
+Budget your 40 turns wisely: spend more on HIGH, less on LOW. But every file must appear in the output.
+
+T1-T5 sets the overall strategy (e.g., T5 = use repomix, prioritize by churn). Risk tiers set depth per file within that strategy. Both apply together.
+
 ---
 
 ## Step 5 — Review Each Changed File
@@ -300,9 +311,12 @@ This summary is posted as the top-level PR comment and is the first thing review
       "suggestion": "Use parameterized queries: `cursor.execute('SELECT * FROM users WHERE username = %s', (username,))`"
     }
   ],
+  "files_clean": ["src/utils/DateHelper.cs", "src/constants/AppColors.cs"],
   "fix_verifications": []
 }
 ```
+
+Include a `files_clean` array listing every file path you reviewed and found no issues in. Every code file in your batch MUST appear in either `findings[].file` or `files_clean[]`.
 
 **Before writing:**
 1. Verify finding count: max 30 findings

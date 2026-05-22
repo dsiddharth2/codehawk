@@ -242,6 +242,7 @@ class FindingsFile:
     review_modes: List[str]          # e.g. ["standard", "security"]
     summary: Optional[str] = None
     findings: List[Finding] = field(default_factory=list)
+    files_clean: List[str] = field(default_factory=list)
     fix_verifications: List[FixVerification] = field(default_factory=list)
     tool_calls: int = 0
     agent: Optional[str] = None      # "codex" | "claude" | "gemini"

@@ -123,7 +123,7 @@ class Settings(BaseSettings):
         description="Number of code files per review batch"
     )
     batch_max_turns: int = Field(
-        default=15,
+        default=40,
         ge=5,
         le=100,
         description="Maximum agent turns per batch review session"
@@ -131,6 +131,26 @@ class Settings(BaseSettings):
     max_total_findings: int = Field(
         default=50,
         description="Maximum total findings to post across all files"
+    )
+
+    # Coverage gate configuration
+    coverage_gate_mode: str = Field(
+        default="hard",
+        description="Coverage gate mode: 'hard' (default) fails gate on incomplete coverage; 'log' logs only (debugging/emergency use)"
+    )
+
+    # Risk classifier thresholds (configurable to avoid code changes during tuning)
+    risk_high_threshold: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description="File risk score >= this threshold is classified HIGH"
+    )
+    risk_medium_threshold: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="File risk score >= this threshold is classified MEDIUM (below = LOW)"
     )
     max_per_file_findings: int = Field(
         default=5,

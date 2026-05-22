@@ -48,7 +48,7 @@ class ReviewJobConfig:
     repo: str
     workspace: Path
     model: str = "o3"
-    max_turns: int = 15
+    max_turns: int = 40
     prompt_path: Optional[Path] = None
     prompt_text: Optional[str] = None
     vcs: str = "ado"
@@ -342,6 +342,41 @@ class ReviewJob:
                 for imp in impacted[:20]:
                     lines.append(f"- `{imp['name']}` ({imp['kind']}) in `{imp['file']}`")
                 lines.append("")
+
+        # Risk classification table (100% coverage required)
+        if changed_files:
+            try:
+                import risk_classifier as rc
+                high_thresh = getattr(self.settings, "risk_high_threshold", 0.6)
+                med_thresh = getattr(self.settings, "risk_medium_threshold", 0.3)
+                risk_map = rc.classify(
+                    changed_files,
+                    graph_analysis=analysis or None,
+                    high_threshold=high_thresh,
+                    medium_threshold=med_thresh,
+                )
+                lines.append("### File Risk Classification (100% coverage required)")
+                lines.append("")
+                lines.append("| File | Risk | Depth | Reason |")
+                lines.append("|------|------|-------|--------|")
+                depth_label = {
+                    "HIGH": "Full review + verify",
+                    "MEDIUM": "Diff review + read if needed",
+                    "LOW": "Diff scan",
+                }
+                for fp, fr in risk_map.items():
+                    reason_str = ", ".join(fr.reasons) if fr.reasons else "—"
+                    lines.append(
+                        f"| `{fp}` | {fr.risk} | {depth_label[fr.risk]} | {reason_str} |"
+                    )
+                lines.append("")
+                lines.append(
+                    "You MUST review every file above. HIGH files get deep review with full-file reads. "
+                    "LOW files get a diff-level scan. Every file must appear in `findings[]` or `files_clean[]`."
+                )
+                lines.append("")
+            except Exception as exc:
+                logger.warning("Risk classification failed (skipping table): %s", exc)
 
         if diffs:
             lines.append("### File Diffs")

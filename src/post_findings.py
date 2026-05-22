@@ -225,6 +225,7 @@ def _parse_findings_file(data: dict):
         review_modes=data.get("review_modes", []),
         summary=data.get("summary"),
         findings=findings,
+        files_clean=data.get("files_clean", []),
         fix_verifications=fix_verifications,
         tool_calls=data.get("tool_calls", 0),
         agent=data.get("agent"),
@@ -530,6 +531,16 @@ def _generate_comparison_md(score, fix_verifications, pr_id: int) -> str:
 # Summary formatting
 # ---------------------------------------------------------------------------
 
+def _coverage_display(files_reviewed: int, total_code_files: int) -> str:
+    """Return a human-readable coverage string like '8 / 12 (67%) — 4 files not reviewed'."""
+    if total_code_files <= 0 or total_code_files == files_reviewed:
+        pct = 100 if total_code_files <= 0 else int(files_reviewed / total_code_files * 100)
+        return f"{files_reviewed} / {max(files_reviewed, total_code_files)} ({pct}%)"
+    pct = int(files_reviewed / total_code_files * 100)
+    not_reviewed = total_code_files - files_reviewed
+    return f"{files_reviewed} / {total_code_files} ({pct}%) — {not_reviewed} file(s) not reviewed"
+
+
 def _build_summary_markdown(
     findings_file,
     filtered_findings: list,
@@ -543,6 +554,7 @@ def _build_summary_markdown(
     pr_details=None,
     files_reviewed: int = 0,
     files_skipped: int = 0,
+    total_code_files: int = 0,
 ) -> str:
     severity_counts = {"critical": 0, "warning": 0, "suggestion": 0}
     category_counts = {"security": 0, "performance": 0, "best_practices": 0, "code_style": 0, "documentation": 0}
@@ -625,7 +637,7 @@ def _build_summary_markdown(
         lines += [
             "",
             "### 📊 Review Statistics",
-            f"- ✅ Files Reviewed: {files_reviewed}",
+            f"- ✅ Files Reviewed: {_coverage_display(files_reviewed, total_code_files)}",
             f"- ⏭️ Files Skipped: {files_skipped}",
             f"- ❌ Files Failed: 0",
             f"- 💬 Total Comments: {len(filtered_findings)}",
@@ -748,7 +760,14 @@ def _build_summary_markdown(
 # CI gate
 # ---------------------------------------------------------------------------
 
-def _evaluate_gate(score, filtered_findings: list, gate_config: Dict[str, Any]) -> Dict[str, Any]:
+def _evaluate_gate(
+    score,
+    filtered_findings: list,
+    gate_config: Dict[str, Any],
+    coverage_ratio: float = 1.0,
+    not_reviewed_files: Optional[List[str]] = None,
+    coverage_gate_mode: str = "hard",
+) -> Dict[str, Any]:
     """
     Evaluate CI gate conditions against .codereview.yml thresholds.
 
@@ -774,6 +793,20 @@ def _evaluate_gate(score, filtered_findings: list, gate_config: Dict[str, Any]) 
             reasons.append(
                 f"Gate failed: star rating {actual_stars} below minimum {min_stars}"
             )
+
+    # Coverage gate (controlled by coverage_gate_mode)
+    if coverage_ratio < 1.0:
+        n = len(not_reviewed_files) if not_reviewed_files else 0
+        file_list = ", ".join(not_reviewed_files[:5]) if not_reviewed_files else "unknown"
+        if n > 5:
+            file_list += f", ... ({n - 5} more)"
+        msg = f"Gate failed: {n} file(s) not reviewed ({file_list}). 100% code review coverage is required."
+        if coverage_gate_mode == "hard":
+            passed = False
+            reasons.append(msg)
+        else:
+            # "log" mode: report as a warning but don't fail
+            reasons.append(f"Coverage warning ({coverage_ratio:.0%}): {msg}")
 
     return {"passed": passed, "reasons": reasons}
 
@@ -811,6 +844,8 @@ def run(
         raise SystemExit(1)
 
     findings_file = _parse_findings_file(raw)
+    # Track whether agent explicitly included files_clean (opted into coverage tracking)
+    agent_uses_coverage_tracking = "files_clean" in raw
 
     # 2. Detect verify-only mode
     is_verify_only = "verify_fixes" in findings_file.review_modes and not findings_file.findings
@@ -892,24 +927,8 @@ def run(
         else:
             _handle_fix_verifications_github(findings_file.fix_verifications, pr_id, repo, dry_run)
 
-    # 11. Gate evaluation from .codereview.yml (verify-only always passes — no new findings)
-    gate_config = _load_codereview_yml(workspace)
-    if is_verify_only:
-        gate_result = {"passed": True, "reasons": []}
-    else:
-        gate_result = _evaluate_gate(score, all_adjusted, gate_config)
-
-    # 11. Generate score comparison markdown when fix verifications are present
-    comparison_md = ""
-    if findings_file.fix_verifications:
-        comparison_md = _generate_comparison_md(score, findings_file.fix_verifications, pr_id)
-
-    # 12. Estimate cost from usage
-    cost_estimate = _estimate_cost(findings_file.usage)
-
-    # 12b. Fetch PR details for summary (title, author, branch)
+    # 11a. Fetch PR details for summary + coverage (title, author, branch)
     pr_details = None
-    files_reviewed = len(set(f.file for f in findings_file.findings))
     files_skipped = 0
     if vcs == "ado" and settings:
         try:
@@ -917,9 +936,60 @@ def run(
             from models.review_models import FetchPRDetailsInput
             pr_activity = FetchPRDetailsActivity(settings=settings)
             pr_details = pr_activity.execute(FetchPRDetailsInput(pr_id=pr_id, repository_id=repo))
-            files_reviewed = len(pr_details.file_changes) if pr_details.file_changes else files_reviewed
         except Exception:
             pass
+
+    # 11b. Compute coverage
+    files_with_findings = set(f.file for f in findings_file.findings)
+    files_clean_set = set(findings_file.files_clean or [])
+    files_reviewed_set = files_with_findings | files_clean_set
+
+    from file_filter import parse_skip_extensions, filter_changed_files
+    skip_exts_str = settings.skip_extensions if settings else ""
+    skip_exts = parse_skip_extensions(skip_exts_str) if skip_exts_str else set()
+    if pr_details and pr_details.file_changes:
+        code_files, _ = filter_changed_files(pr_details.file_changes, skip_exts)
+        total_code_files = len(code_files)
+        all_code_paths = {fc.path for fc in code_files}
+    else:
+        total_code_files = len(files_reviewed_set) or 1
+        all_code_paths = files_reviewed_set.copy()
+
+    not_reviewed_files = sorted(all_code_paths - files_reviewed_set)
+    files_reviewed = len(files_reviewed_set)
+    # Coverage gate only fires when the agent explicitly included files_clean[] in the output,
+    # signalling that it has opted into coverage tracking. Old-style findings.json without
+    # this key get no coverage gate (backward compatible).
+    if agent_uses_coverage_tracking and total_code_files > 0:
+        coverage_ratio = len(files_reviewed_set) / total_code_files
+    else:
+        coverage_ratio = 1.0
+    coverage_gate_mode = getattr(settings, "coverage_gate_mode", "hard") if settings else "hard"
+
+    # 11c. Apply coverage penalty to score (only when coverage tracking is active)
+    score = scorer.apply_coverage_penalty(score, coverage_ratio)
+
+    # 12. Gate evaluation from .codereview.yml (verify-only always passes — no new findings)
+    gate_config = _load_codereview_yml(workspace)
+    if is_verify_only:
+        gate_result = {"passed": True, "reasons": []}
+    else:
+        gate_result = _evaluate_gate(
+            score,
+            all_adjusted,
+            gate_config,
+            coverage_ratio=coverage_ratio,
+            not_reviewed_files=not_reviewed_files,
+            coverage_gate_mode=coverage_gate_mode,
+        )
+
+    # 12b. Generate score comparison markdown when fix verifications are present
+    comparison_md = ""
+    if findings_file.fix_verifications:
+        comparison_md = _generate_comparison_md(score, findings_file.fix_verifications, pr_id)
+
+    # 12c. Estimate cost from usage
+    cost_estimate = _estimate_cost(findings_file.usage)
 
     # 13. Post/update summary
     summary_md = _build_summary_markdown(
@@ -935,6 +1005,7 @@ def run(
         pr_details=pr_details,
         files_reviewed=files_reviewed,
         files_skipped=files_skipped,
+        total_code_files=total_code_files,
     )
 
     if not dry_run and settings:
