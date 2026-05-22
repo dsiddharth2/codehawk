@@ -1,136 +1,129 @@
 # Sprint 3 — Review Quality + Coverage Enforcement — Code Review
 
 **Reviewer:** local-codehawk-reviewer
-**Date:** 2026-05-22 22:30:00+05:30
+**Date:** 2026-05-22 23:45:00+05:30
 **Verdict:** APPROVED
 
 > See the recent git history of this file to understand the context of this review.
 
 ---
 
-## Phases 1–4 Regression Check
+## Phases 1-5 Regression Check
 
-**PASS.** All previously approved phases (1 through 4) re-verified against Phase 5 commits (2a41216, a2ba02b). No regressions found:
+**PASS.** All previously approved phases (1 through 5) re-verified against the Phase 6 commit (55e7888). No regressions found:
 
-- `temperature=0.3` and `seed=42` in `openai_runner.py` — unchanged.
-- "max 40 tool calls" in `review-pr-core.md` Step 0 — present, "max 10" absent.
-- "ZERO or minimal" in `SYSTEM_PROMPT` — absent (correctly removed in Phase 1).
-- Step 5e verify-before-CRITICAL — present in `review-pr-core.md`.
-- `failed_diffs` injection in `review_job.py` — unchanged from Phase 1 approval.
-- `risk_classifier.py` — unchanged from Phase 2 approval.
-- `files_clean` in `review_models.py` and `findings-schema.json` — present.
-- Coverage gate hard/log modes in `post_findings.py` — unchanged.
-- `batch_max_turns` default 40 in `config.py` — unchanged.
-- 9 valid categories, 4 remap entries in `post_findings.py` — unchanged.
-- Architecture and performance checklist files — present.
-- `merge_similar_findings()` and `_write_audit_trail()` in `post_findings.py` — unchanged.
-- All 270 pre-Phase-5 tests pass (302 total, 32 new Phase 5 tests).
-
----
-
-## Task 22: Language Registry
-
-**PASS.** `commands/languages.yml` created with exactly 15 language entries: csharp, javascript, typescript, react, python, java, kotlin, go, rust, cpp, swift, android, ruby, php, sql.
-
-1. **Schema completeness.** Every entry has `extensions`, `config_files`, and `rules_file` fields. **PASS.**
-2. **Extension mapping matches plan.** C# → `.cs`, JS → `.js/.jsx/.mjs`, TS → `.ts/.tsx`, Go → `.go`, Rust → `.rs`, C++ → `.cpp/.cc/.cxx/.c/.h/.hpp/.hxx`, etc. **PASS.**
-3. **Overlay languages.** React and Android have `extensions: []` — detected via config files only, consistent with plan specification for overlay languages. **PASS.**
-4. **Rules file paths.** All `rules_file` values point to `commands/lang-rules/<lang>.md` matching the actual file locations. **PASS.**
+- `temperature=0.3` and `seed=42` in `openai_runner.py` — unchanged (Phase 1).
+- "max 40 tool calls" in `review-pr-core.md` Step 0 — present; "max 10" absent (Phase 1).
+- "ZERO or minimal" absent from `SYSTEM_PROMPT` — correctly removed in Phase 1.
+- Step 5e verify-before-CRITICAL — present in `review-pr-core.md` (Phase 1).
+- `failed_diffs` injection in `review_job.py` — unchanged (Phase 1).
+- `risk_classifier.py` — unchanged; thresholds `risk_high_threshold=0.6`, `risk_medium_threshold=0.3` in `config.py` (Phase 2).
+- `files_clean` in `review_models.py` and `findings-schema.json` — present (Phase 2).
+- Coverage gate hard/log modes in `post_findings.py` — unchanged (Phase 2).
+- `batch_max_turns` default 40 in `config.py` — unchanged (Phase 2).
+- 9 valid categories, 4 remap entries in `post_findings.py` — unchanged (Phase 3).
+- Architecture and performance checklist files present (Phase 3).
+- `merge_similar_findings()` and `_write_audit_trail()` in `post_findings.py` — unchanged (Phase 4).
+- All 15 language rules files in `commands/lang-rules/` — present (Phase 5).
+- `stack_detector.py` with `detect()` function — unchanged (Phase 5).
+- `_build_lang_rules_section` in `review_job.py` — unchanged (Phase 5).
 
 ---
 
-## Task 23: Stack Detector
+## Task 28: Fix Verifier
 
-**PASS.** `src/stack_detector.py` created with `StackProfile` dataclass and `detect()` function.
+**PASS.** `src/fix_verifier.py` created with deterministic fix verification algorithm.
 
-1. **StackProfile dataclass.** Fields `languages: list[str]`, `frameworks: dict[str, dict[str, str]]`, `detected_from: list[str]` — matches plan specification exactly. **PASS.**
-2. **Config file parsers.** 11 language detectors implemented: `_detect_csharp` (XML `.csproj` parsing for `TargetFramework` + `PackageReference`), `_detect_node` (JSON `package.json` for React/Angular/Vue/TS/Next + `tsconfig.json`), `_detect_python` (requirements.txt, pyproject.toml, Pipfile), `_detect_java` (pom.xml with Maven namespace handling, build.gradle/kts), `_detect_go`, `_detect_rust`, `_detect_cpp`, `_detect_swift`, `_detect_android`, `_detect_ruby`, `_detect_php`. **PASS.**
-3. **C# .NET 8.0 test.** Unit test `test_detect_csharp_net8` confirms: `.csproj` with `<TargetFramework>net8.0</TargetFramework>` → `languages=["csharp"]`, `frameworks={"csharp": {"dotnet": "8.0"}}`. Matches the "Done when" criterion exactly. **PASS.**
-4. **Monorepo limitation.** Code comment at module docstring: "Monorepo limitation: only root-level configs are parsed (per-directory profiles deferred to a future sprint)." **PASS.**
-5. **Error handling.** Every parser wraps in try/except, logs to debug, and continues gracefully. No parser failure crashes the detection pipeline. **PASS.**
-6. **XML namespace handling in pom.xml.** Tries both with and without Maven 4.0 namespace for `maven.compiler.source` and `java.version`. **PASS.**
-7. **tsconfig.json comment stripping.** Handles JSON-with-comments by stripping `//` and `/* */` before parsing. **PASS.**
+1. **Deleted files -> not_relevant (no LLM).** `_get_file_statuses` parses `git diff --name-status` for `D` entries. Findings on deleted files immediately get `status="not_relevant"` with reason "File was deleted or removed from the repository." No LLM call made. Unit test `test_deleted_file_all_findings_not_relevant` confirms. **PASS.**
 
----
+2. **Unchanged files -> still_present (no LLM).** If a file is not in the diff output (neither modified, deleted, nor renamed), all its findings get `status="still_present"`. Unit test `test_unchanged_file_all_findings_still_present_no_llm` confirms `_call_llm_for_verification` is never called. **PASS.**
 
-## Task 24: Version-aware Rules Files (Batch 1)
+3. **Modified files -> file-level LLM verification (one call per file).** `_verify_single_file` reads the full file content, builds a verification prompt with all findings for that file, and makes one `_call_llm_for_verification` call. Unit test `test_modified_file_3_findings_one_llm_call` confirms `mock_llm.call_count == 1` for 3 findings on the same file. **PASS.**
 
-**PASS.** All 8 files created in `commands/lang-rules/`:
+4. **15-file cap with overflow batching.** `_INDIVIDUAL_FILE_CAP = 15` and `_BATCH_FILE_SIZE = 5`. First 15 files processed individually, overflow files batched in groups of 5 (each still gets its own LLM call within the batch). Unit test `test_20_modified_files_respects_cap` confirms 20 total calls for 20 files. **PASS.**
 
-| File | Checklist Items | Version Sections |
-|------|----------------|-----------------|
-| csharp.md | 40 | All Versions, .NET 6+, .NET 8+, EF Core 6+, ASP.NET Core |
-| javascript.md | 30 | Verified present |
-| typescript.md | 30 | Verified present |
-| react.md | 30 | Verified present |
-| python.md | 30 | All Versions, Python 3.8+, Python 3.10+, Python 3.12+ |
-| java.md | 30 | Verified present |
-| kotlin.md | 30 | Verified present |
-| go.md | 30 | Verified present |
+5. **Blast radius checks.** `_annotate_blast_radius` checks fixed findings with `severity="critical"` or `category="architecture"` against the graph store. If dependents exist, appends informational note. Does not change verdict. Unit tests confirm annotation for critical findings with dependents, no annotation for still_present, and no annotation when graph returns empty. **PASS.**
 
-1. **Minimum item count.** All files have >= 30 checklist items. csharp.md leads with 40. **PASS.**
-2. **Version sections.** Spot-checked csharp.md and python.md in detail. csharp.md has 5 version sections matching plan (All Versions, .NET 6+, .NET 8+, EF Core 6+, ASP.NET Core). python.md has 4 version sections (All Versions, Python 3.8+, Python 3.10+, Python 3.12+). **PASS.**
-3. **Content quality.** Rules focus on real bugs and security issues, not formatting preferences. Examples: C# covers `async void` antipattern, SQL injection in EF Core raw SQL, CORS wildcard, anti-forgery tokens. Python covers mutable defaults, command injection, bare except, SQL injection. **PASS.**
+6. **ADO thread posting.** `_post_results_to_ado` posts to ADO threads: "Verified fixed" for fixed, "File deleted/removed" for not_relevant, and "Still present" via `_post_still_present_reply` for still_present findings. **PASS.**
+
+7. **Default to still_present on failure.** `_map_llm_results_to_verifications` defaults to `still_present` when: LLM returns empty list, LLM returns None, finding index missing from LLM results, or unrecognized status string. Four separate unit tests confirm all these paths. **PASS.**
+
+8. **review-pr-core.md Step 6 updated.** Step 6 now reads "Fix verification is handled automatically by the system after your review completes." No sub-steps 6a/6b/6c/6d. No "Write fix_verifications" instruction. Unit tests `TestReviewPrCoreStep6` confirm all three assertions. **PASS.**
+
+9. **Renamed file handling.** `_get_file_statuses` parses `R100` lines, maps old path to new path in `renamed_map`, and adds the new path to `modified` set. The main loop remaps findings via `renamed_map.get(file_path, file_path)` before checking modified set. Unit test `test_renamed_file_detected` confirms. **PASS.**
+
+**NOTE (non-blocking):** The `_verify_files_with_llm` overflow batching loop iterates files individually within each batch of 5, calling `_verify_single_file` per file. The batching structure groups calls but doesn't combine multiple files into a single LLM call. This is functionally correct and arguably better for reliability (one file per call), but the 15-file cap + batching described in the docstring ("overflow batched 5 per call") is slightly misleading — it's "batched 5 per iteration" with one call per file. No functional impact.
 
 ---
 
-## Task 25: Version-aware Rules Files (Batch 2)
+## Task 29: Parallel Batch Execution
 
-**PASS.** All 7 files created in `commands/lang-rules/`:
+**PASS.** `src/batch_review_job.py` updated with `ThreadPoolExecutor` and retry logic.
 
-| File | Checklist Items | Version Sections |
-|------|----------------|-----------------|
-| rust.md | 30 | All Versions, Edition 2021, Edition 2024 |
-| cpp.md | 30 | Verified present |
-| swift.md | 30 | Verified present |
-| android.md | 30 | Verified present |
-| ruby.md | 30 | Verified present |
-| php.md | 30 | Verified present |
-| sql.md | 30 | Verified present |
+1. **ThreadPoolExecutor with max 3 workers.** Line 124: `max_workers = min(3, batch_total)`. Line 126: `with ThreadPoolExecutor(max_workers=max_workers) as pool:`. Futures submitted via `pool.submit(self._run_batch_with_retry, ...)` and collected via `as_completed(futures)`. **PASS.**
 
-1. **Minimum item count.** All 7 files have >= 30 checklist items. **PASS.**
-2. **Spot-check rust.md.** Three version sections (All Versions, Edition 2021, Edition 2024). Rules cover `unwrap()` in library code, `unsafe` block documentation, `Arc<Mutex<T>>` over-use, Edition 2024 `gen` blocks and `async` closures. **PASS.**
+2. **Exponential backoff retry.** `_run_batch_with_retry` at line 267: `delays = [1, 2, 4]`. Rate-limit detection checks for "429", "ratelimit", "too many requests" in exception string, plus exception class name check. Non-rate-limit errors raised immediately without retry. **PASS.**
 
----
+3. **Batch failure isolation.** Line 147-150: `except Exception as exc: logger.error(...)` — failed batches log the error but don't crash the pipeline. Other batches continue. **PASS.**
 
-## Task 26: Integration into review_job.py
+4. **Parallel faster than sequential.** Unit test `test_parallel_batches_complete_faster_than_sequential` confirms 3 batches with 0.1s delay each complete in < 0.25s (not 0.3s sequential). **PASS.**
 
-**PASS.** Three integration points implemented correctly.
+5. **Rate limit retry test.** `test_rate_limit_error_retries_with_backoff` confirms first failure triggers retry with `sleep(1)`, second attempt succeeds. **PASS.**
 
-1. **`_build_config_section` flow.** Method at `review_job.py:602-641`. Loads `.codereview.md` first — if present, `has_codereview_md = True` and auto-detection is skipped (line 627: `if not has_codereview_md`). If no `.codereview.md`, calls `_build_lang_rules_section()`. **PASS — existing override behavior preserved.**
+6. **Non-rate-limit errors not retried.** `test_non_rate_limit_error_not_retried` confirms ValueError raises immediately with `call_count == 1`. **PASS.**
 
-2. **`_build_lang_rules_section` implementation.** Method at `review_job.py:643-697`. Calls `stack_detector.detect(workspace)`, iterates detected languages, loads `commands/lang-rules/<lang>.md`, filters via `_filter_rules_for_version()`, and injects into prompt with "Auto-detected Stack" header and framework summary. **PASS.**
+7. **Exhausted retries raise.** `test_exhausted_retries_raises_last_exception` confirms 3 rate-limit failures exhaust retries and raise, with `call_count == 3`. **PASS.**
 
-3. **`_filter_rules_for_version` + `_version_heading_matches`.** At `review_job.py:36-126`. "All Versions" sections always included. Version-specific sections (e.g., ".NET 8+") included only when detected version >= required version. Comparison uses tuple-based integer comparison. Unknown versions default to inclusion (safe fallback). **PASS.**
-
-4. **`file_filter.py` registry lookup.** `load_registered_extensions()` at line 43 loads extensions from `languages.yml` via `yaml.safe_load`. `filter_changed_files()` at line 79 uses registry when available, falls back to blacklist when `languages.yml` is missing/broken. **PASS.**
-
-5. **`review-pr-core.md` Step 1 update.** Line 18: "If `.codereview.md` exists, load it — project-specific rules always take precedence. Otherwise, the system reads your project config files (package.json, *.csproj, go.mod, etc.) to detect exact framework versions and injects version-appropriate review rules automatically." **PASS.**
+**NOTE (non-blocking):** The retry loop sleeps on the 3rd (final) attempt before the loop ends and raises `last_exc`. This wastes a 4-second sleep before the inevitable failure. A minor optimization would be to check `attempt < len(delays)` before sleeping on the last iteration, or restructure as initial attempt + retry loop. Not blocking since the behavior is correct — it just adds 4s of unnecessary latency on exhausted retries.
 
 ---
 
-## Task 27 VERIFY: 302 Unit Tests
+## Task 30: VERIFY — Fix Verification + Parallelism
 
-**PASS.** `python -m pytest tests/ -v` completed in 23.25s: **302 passed, 13 skipped, 0 failed.**
+**PASS.** 331 unit tests pass in 16.94 seconds. 29 new Phase 6 tests covering:
 
-32 new Phase 5 tests in `tests/unit/test_phase5_lang_intelligence.py`:
-- `TestStackDetector` (11 tests): .NET 8 detection, .NET 6 detection, EF Core version, TypeScript from package.json, React overlay, Python from requirements.txt, Python version from pyproject, Go, Rust edition, empty workspace, dataclass defaults.
-- `TestLangRulesFiles` (5 tests): all 15 files exist, each has >= 30 checklist items, each has version sections, languages.yml has 15 entries, entries have required fields.
-- `TestVersionFiltering` (8 tests): "All Versions" always included, .NET 8+ included for .NET 8, .NET 8+ excluded for .NET 6, Python 3.10+ included for 3.12, Python 3.10+ excluded for 3.8, unknown version includes section, real csharp.md tests for both .NET 8 and .NET 6.
-- `TestFileFilterRegistryVerify` (3 tests): .cs reviewed when csharp registered, .json skipped when not registered, .codereview.md skipped.
+- `TestGetFileStatuses` (5 tests): deleted, modified, renamed detection; empty commit; git failure
+- `TestVerifyFixesDeterministic` (3 tests): deleted -> not_relevant, unchanged -> still_present, empty input
+- `TestVerifyFixesLLM` (6 tests): one call per file, 5 files = 5 calls, 20-file cap, LLM failure, garbage JSON, unreadable file
+- `TestMapLLMResults` (5 tests): fixed/still_present mapping, missing results, unknown status, empty results
+- `TestBlastRadiusAnnotation` (3 tests): critical fixed + dependents, still_present skipped, empty dependents
+- `TestParallelBatchExecution` (4 tests): parallel timing, rate-limit retry, non-rate-limit no-retry, exhausted retries
+- `TestReviewPrCoreStep6` (3 tests): no sub-steps, "handled automatically" present, no "Write fix_verifications"
 
-**Test quality assessment.** Coverage is meaningful:
-- Stack detector tested with real file parsing (csproj XML, package.json, pyproject.toml, go.mod, Cargo.toml) via `tmp_path` fixtures.
-- Version filtering tested at both unit level (synthetic rules) and integration level (real csharp.md file).
-- File filter registry tested with the actual `languages.yml` file.
-- Edge cases covered: empty workspace, unknown versions, overlay languages.
+Test coverage is meaningful — all deterministic paths, LLM failure modes, retry logic, and prompt update assertions are tested. No overlapping or redundant tests. **PASS.**
 
-**NOTE:** The import `import stack_detector as sd` at `review_job.py:646` is a lazy import inside the method — consistent with the codebase's bare-module import pattern (`from config import Settings`, etc.) which assumes `src/` is on `sys.path`. This works at runtime and in tests. No issue.
+---
+
+## Test Suite Health
+
+All 331 unit tests pass (0 failures, 0 errors, 16.94s). Breakdown by phase:
+
+| Phase | Tests Added | Cumulative |
+|-------|------------|------------|
+| Phase 1 | 224 (baseline) | 224 |
+| Phase 2 | 28 | 249* |
+| Phase 3 | 3 | 252 |
+| Phase 4 | 21 | 270* |
+| Phase 5 | 32 | 302 |
+| Phase 6 | 29 | 331 |
+
+*Phase totals adjusted per progress.json; some phases include fixture/conftest additions.
+
+---
+
+## Security Check
+
+- `fix_verifier.py` uses `subprocess.run` with a list (not shell=True) for `git diff`. **PASS.**
+- LLM API key read from `os.environ` only — not hardcoded. **PASS.**
+- ADO posting uses `BasicAuthentication` with token from settings — no secrets in code. **PASS.**
+- File content truncated to 8000 chars in LLM prompt to prevent token abuse. **PASS.**
 
 ---
 
 ## Summary
 
-**All 6 Phase 5 tasks (22–27) meet their "Done when" criteria. No regressions in Phases 1–4. 302 tests pass, 0 fail. Verdict: APPROVED.**
+**APPROVED.** All three Phase 6 tasks (28-30) meet their PLAN.md "Done when" criteria. The fix verifier correctly handles all three resolution paths (deleted, unchanged, modified) with appropriate defaults-to-still_present safety. Parallel batch execution uses ThreadPoolExecutor with max 3 workers and exponential backoff retry. 331 unit tests pass with no regressions in Phases 1-5.
 
-Phase 5 delivers a complete language intelligence system: 15-language registry in YAML, stack detector parsing 13 config file formats, 15 version-aware rules files with 30–40 checklist items each, version-gated filtering, and clean integration into the review pipeline with `.codereview.md` override preservation. Test coverage is comprehensive with 32 new tests covering detection, filtering, and registry modes.
+Two non-blocking notes documented above (overflow batching docstring wording, wasted sleep on final retry) — neither affects correctness or requires changes.
+
+This completes the Sprint 3 — Review Quality + Coverage Enforcement final review. All 6 phases approved.
