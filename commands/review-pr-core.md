@@ -50,7 +50,7 @@ From the **"Pre-computed Review Context"** section in this prompt, note:
 
 Use the review priorities to plan your review order: high-risk files first, then files with test gaps, then remaining files.
 
-Flag missing test coverage from the test gaps list as findings.
+Flag missing test coverage from the test gaps list as findings. Use category `testing` (not `best_practices`) for all test-gap findings. These are informational — they appear as inline comments but do not affect the CI gate or star rating.
 
 To read existing review threads (for fix verification in Step 6 only):
 - Use the `list_threads` tool
@@ -73,8 +73,8 @@ All review modes are always active. Apply every checklist and severity multiplie
 |------|-------|-----------|
 | `standard` | General correctness, code patterns, test coverage | `commands/review-mode-standard.md` |
 | `security` | OWASP Top 10, auth, crypto, secrets, input validation | `commands/review-mode-security.md` |
-| `architecture` | API design, interfaces, coupling, separation of concerns | (inline in scoring.md) |
-| `performance` | Queries, caching, N+1, memory, algorithmic complexity | (inline in scoring.md) |
+| `architecture` | API design, interfaces, coupling, separation of concerns | `commands/review-mode-architecture.md` |
+| `performance` | Queries, caching, N+1, memory, algorithmic complexity | `commands/review-mode-performance.md` |
 | `migration` | Schema changes, data migrations, backward compatibility | `commands/review-mode-migration.md` |
 
 Apply the checklists from each mode file listed above. All checklists are additive.
@@ -185,13 +185,15 @@ Before emitting any finding with severity `critical`, you MUST call `read_local_
 Apply ALL review checklists for every file:
 - `commands/review-mode-standard.md` — correctness, patterns, testing, naming, error handling
 - `commands/review-mode-security.md` — OWASP Top 10, auth, crypto, secrets, injection
+- `commands/review-mode-architecture.md` — API design, coupling, separation of concerns
+- `commands/review-mode-performance.md` — queries, caching, N+1, algorithmic complexity
 - `commands/review-mode-migration.md` — schema changes, data loss, rollback safety (when SQL/migration files present)
 - `commands/scoring.md` — severity calibration and category definitions
 
 For each genuine issue found:
 - Assign `id`: `cr-001`, `cr-002`, ... (sequential, padded to 3 digits)
 - Assign `severity`: `critical`, `warning`, or `suggestion`
-- Assign `category`: `security`, `performance`, `best_practices`, `code_style`, `documentation`
+- Assign `category`: `security`, `performance`, `best_practices`, `architecture`, `correctness`, `error_handling`, `code_style`, `documentation`, `testing`
 - Assign `confidence`: 0.0-1.0 — how certain are you this is a real problem? (findings below 0.7 are filtered out by post_findings.py — set honestly). For code style and documentation findings (unused imports, naming issues, missing docs), use 0.85+ confidence — these are objectively verifiable, not speculative.
 - Write a concrete `message` explaining the problem and why it matters
 - **Always** include a `suggestion` with a concrete code fix — show the corrected code the developer can copy-paste, not just a description of what to change. Use a fenced code block inside the string when possible.

@@ -83,7 +83,7 @@ class ReviewComment:
     file_path: str
     line_number: Optional[int]
     severity: str  # 'critical', 'warning', 'suggestion', 'good'
-    category: str  # 'security', 'performance', 'best_practices', 'code_style', 'documentation'
+    category: str  # 'security', 'performance', 'best_practices', 'architecture', 'correctness', 'error_handling', 'code_style', 'documentation', 'testing'
     message: str
     suggestion: Optional[str] = None
     confidence: float = 0.8
@@ -208,7 +208,7 @@ class Finding:
     file: str                        # file path relative to repo root
     line: int                        # line number
     severity: str                    # "critical" | "warning" | "suggestion"
-    category: str                    # "security" | "performance" | "best_practices" | "code_style" | "documentation"
+    category: str                    # "security" | "performance" | "best_practices" | "architecture" | "correctness" | "error_handling" | "code_style" | "documentation" | "testing"
     title: str                       # short summary
     message: str                     # full description
     confidence: float                # 0.0 – 1.0

@@ -26,11 +26,15 @@ This file is the authoritative reference for how findings are weighted into a PR
 |----------|-----------|---------|
 | `security` | Vulnerabilities, auth flaws, injection, secrets, insecure defaults | SQL injection, XSS, hardcoded credentials, broken access control, insecure deserialization |
 | `performance` | Algorithmic complexity, N+1 queries, cache misses, blocking I/O | O(n²) loop, unbatched DB query, synchronous HTTP call on hot path |
-| `best_practices` | Correctness, error handling, robustness, design patterns | Missing null check, swallowed exception, race condition, unvalidated input at boundary |
+| `best_practices` | Robustness, design patterns, general correctness | Swallowed exception, race condition, unvalidated input at boundary |
+| `architecture` | API design, interfaces, coupling, separation of concerns | Circular dependency, business logic in controller, DTO leaking internals |
+| `correctness` | Logic errors, wrong behavior, data loss | Off-by-one, incorrect state transition, wrong formula |
+| `error_handling` | Missing or incorrect error handling | Unhandled exception, silent failure, missing null check on external data |
 | `code_style` | Naming, formatting, readability | Poor variable name, inconsistent indentation, unused import |
 | `documentation` | Missing or inaccurate docs, changelog gaps | Wrong docstring, missing `@param`, inaccurate README claim |
+| `testing` | Test coverage gaps identified from test gap analysis | Missing test for new public method, untested edge case, missing integration test |
 
-**Scoring note:** `code_style` and `documentation` categories have a default penalty of 0.0 (zero weight in the star rating) unless overridden in `.codereview.yml`. They are still posted as comments, but do not affect the CI gate.
+**Scoring note:** `code_style`, `documentation`, and `testing` categories have a default penalty of 0.0 (zero weight in the star rating) unless overridden in `.codereview.yml`. They are still posted as inline comments but do not affect the CI gate or star rating.
 
 ---
 
@@ -43,8 +47,12 @@ These are the default penalty points per finding. Values can be overridden via e
 | `security` | **5.0** | 4.0 | 2.0 |
 | `performance` | **3.0** | 2.0 | 1.0 |
 | `best_practices` | **2.0** | 1.0 | 0.5 |
+| `architecture` | **2.0** | 1.0 | 0.5 |
+| `correctness` | **2.0** | 1.0 | 0.5 |
+| `error_handling` | **1.5** | 0.75 | 0.25 |
 | `code_style` | 0.0 | 0.0 | 0.0 |
 | `documentation` | 0.0 | 0.0 | 0.0 |
+| `testing` | 0.0 | 0.0 | 0.0 |
 
 Penalty points accumulate additively. The total penalty maps to a star rating:
 

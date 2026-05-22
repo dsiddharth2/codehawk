@@ -188,6 +188,26 @@ class Settings(BaseSettings):
     penalty_documentation_warning: float = Field(default=0.0, ge=0.0, le=100.0)
     penalty_documentation_suggestion: float = Field(default=0.0, ge=0.0, le=100.0)
 
+    # Architecture Issue Penalties
+    penalty_architecture_critical: float = Field(default=2.0, ge=0.0, le=100.0)
+    penalty_architecture_warning: float = Field(default=1.0, ge=0.0, le=100.0)
+    penalty_architecture_suggestion: float = Field(default=0.5, ge=0.0, le=100.0)
+
+    # Correctness Issue Penalties
+    penalty_correctness_critical: float = Field(default=2.0, ge=0.0, le=100.0)
+    penalty_correctness_warning: float = Field(default=1.0, ge=0.0, le=100.0)
+    penalty_correctness_suggestion: float = Field(default=0.5, ge=0.0, le=100.0)
+
+    # Error Handling Issue Penalties
+    penalty_error_handling_critical: float = Field(default=1.5, ge=0.0, le=100.0)
+    penalty_error_handling_warning: float = Field(default=0.75, ge=0.0, le=100.0)
+    penalty_error_handling_suggestion: float = Field(default=0.25, ge=0.0, le=100.0)
+
+    # Testing Issue Penalties (0 = informational only)
+    penalty_testing_critical: float = Field(default=0.0, ge=0.0, le=100.0)
+    penalty_testing_warning: float = Field(default=0.0, ge=0.0, le=100.0)
+    penalty_testing_suggestion: float = Field(default=0.0, ge=0.0, le=100.0)
+
     # Star Rating Thresholds (penalty points)
     penalty_threshold_5_stars: float = Field(default=0.0, ge=0.0, le=1000.0)
     penalty_threshold_4_stars: float = Field(default=5.0, ge=0.0, le=1000.0)
@@ -269,7 +289,31 @@ class Settings(BaseSettings):
                 'warning': self.penalty_documentation_warning,
                 'suggestion': self.penalty_documentation_suggestion,
                 'good': 0.0
-            }
+            },
+            'architecture': {
+                'critical': self.penalty_architecture_critical,
+                'warning': self.penalty_architecture_warning,
+                'suggestion': self.penalty_architecture_suggestion,
+                'good': 0.0
+            },
+            'correctness': {
+                'critical': self.penalty_correctness_critical,
+                'warning': self.penalty_correctness_warning,
+                'suggestion': self.penalty_correctness_suggestion,
+                'good': 0.0
+            },
+            'error_handling': {
+                'critical': self.penalty_error_handling_critical,
+                'warning': self.penalty_error_handling_warning,
+                'suggestion': self.penalty_error_handling_suggestion,
+                'good': 0.0
+            },
+            'testing': {
+                'critical': self.penalty_testing_critical,
+                'warning': self.penalty_testing_warning,
+                'suggestion': self.penalty_testing_suggestion,
+                'good': 0.0
+            },
         }
 
     def get_star_thresholds(self) -> List[float]:

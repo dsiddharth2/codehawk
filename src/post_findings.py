@@ -125,14 +125,13 @@ def _gh_run_with_retry(cmd, max_retries: int = 3, base_delay: float = 1.0, **kwa
     raise last_exc  # type: ignore[misc]
 
 
-VALID_CATEGORIES = {"security", "performance", "best_practices", "code_style", "documentation"}
+VALID_CATEGORIES = {
+    "security", "performance", "best_practices", "code_style",
+    "documentation", "testing", "architecture", "correctness", "error_handling"
+}
 CATEGORY_REMAP = {
-    "architecture": "best_practices",
     "reliability": "best_practices",
     "maintainability": "best_practices",
-    "error_handling": "best_practices",
-    "testing": "best_practices",
-    "correctness": "best_practices",
     "naming": "code_style",
     "formatting": "code_style",
 }
@@ -872,8 +871,12 @@ def run(
             "security": {"critical": 5.0, "warning": 4.0, "suggestion": 2.0, "good": 0.0},
             "performance": {"critical": 3.0, "warning": 2.0, "suggestion": 1.0, "good": 0.0},
             "best_practices": {"critical": 2.0, "warning": 1.0, "suggestion": 0.5, "good": 0.0},
+            "architecture": {"critical": 2.0, "warning": 1.0, "suggestion": 0.5, "good": 0.0},
+            "correctness": {"critical": 2.0, "warning": 1.0, "suggestion": 0.5, "good": 0.0},
+            "error_handling": {"critical": 1.5, "warning": 0.75, "suggestion": 0.25, "good": 0.0},
             "code_style": {"critical": 0.0, "warning": 0.0, "suggestion": 0.0, "good": 0.0},
             "documentation": {"critical": 0.0, "warning": 0.0, "suggestion": 0.0, "good": 0.0},
+            "testing": {"critical": 0.0, "warning": 0.0, "suggestion": 0.0, "good": 0.0},
         }
         star_thresholds = [0.0, 5.0, 15.0, 30.0, 50.0]
         settings = None
