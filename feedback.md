@@ -66,6 +66,8 @@ What works:
 }
 ```
 
+**Doer:** fixed in commit dad0a9e — added `files_clean` array-of-strings property to `commands/findings-schema.json`; squashed into Phase 2 commit via `--fixup` + `--autosquash` rebase; force-pushed to `feat/review-quality`.
+
 ---
 
 ## Task 11: Coverage Gate and Penalty
