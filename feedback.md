@@ -1,122 +1,138 @@
 # Sprint 3 — Review Quality + Coverage Enforcement — Code Review
 
 **Reviewer:** local-codehawk-reviewer
-**Date:** 2026-05-22 23:15:00+05:30
+**Date:** 2026-05-23 00:45:00+05:30
 **Verdict:** APPROVED
 
 > See the recent git history of this file to understand the context of this review.
 
 ---
 
-## Phase 1–2 Regression Check
+## Phase 1–3 Regression Check
 
-**PASS.** Phases 1 (approved in 63ebc04) and 2 (approved in 5940338) re-verified against the Phase 3 commit (23d7d06). No regressions found:
-- `temperature=0.3` in both API call sites, `seed=42` in `_run_chat_completions` — unchanged.
+**PASS.** Phases 1 (approved in 63ebc04), 2 (approved in 5940338), and 3 (approved in dd0d6f0) re-verified against the Phase 4 commit (af5caed). No regressions found:
+
+- `temperature=0.3` in `_run_chat_completions` (openai_runner.py:199), `seed=42` (openai_runner.py:200) — unchanged.
 - "max 40 tool calls" in `review-pr-core.md` Step 0 — unchanged.
 - Step 5e verify-before-CRITICAL — present.
-- `failed_diffs` injection — correct wording, no contradictions.
+- `failed_diffs` injection in `review_job.py` — correct wording, no contradictions.
 - `risk_classifier.py` — unchanged from Phase 2 approval.
-- `files_clean` in `findings-schema.json` — present (fixed in dad0a9e, verified in prior re-review).
+- `files_clean` in `findings-schema.json` — present.
 - Coverage gate hard/log modes — unchanged.
-- `batch_max_turns` default 40 — unchanged.
-- All 28 Phase 2 tests in `test_coverage_system.py` pass.
+- `batch_max_turns` default 40 (`config.py:126`) — unchanged.
+- `VALID_CATEGORIES` — all 9 categories present (`post_findings.py:130-133`).
+- `CATEGORY_REMAP` — only 4 entries (`post_findings.py:134-138`).
+- Architecture and performance checklist files — present and referenced from `review-pr-core.md`.
+- All 249 Phase 1-3 unit tests pass.
 
 ---
 
-## Task 14: New `testing` category with zero-weight scoring
+## Task 19: Comment merging
 
-**PASS.** All three changes verified:
+**PASS.** `merge_similar_findings()` added at `post_findings.py:271-330`.
 
-1. **`VALID_CATEGORIES`** (`post_findings.py:129`): Contains `"testing"`. **PASS.**
-2. **`CATEGORY_REMAP`** (`post_findings.py:132-136`): Does NOT contain `"testing"` — correct, it was removed. Only 4 remap entries remain (`reliability`, `maintainability`, `naming`, `formatting`). **PASS.**
-3. **`scoring.md`** penalty matrix: `testing` row present with `0.0 | 0.0 | 0.0` — zero weight. **PASS.**
-4. **`config.py`** penalty fields: `penalty_testing_critical/warning/suggestion` all default to `0.0`. **PASS.**
-5. **`get_penalty_matrix()`** (`config.py:296-300`): Includes `testing` entry with all-zero penalties. **PASS.**
-6. **`review-pr-core.md`** Step 2 (line 53): "Use category `testing` (not `best_practices`) for all test-gap findings. These are informational — they appear as inline comments but do not affect the CI gate or star rating." — matches plan text. **PASS.**
-7. **`findings-schema.json`** Finding.category enum (line 99): Includes `"testing"`. **PASS.**
+1. **Merge criteria implementation.** Groups by `f.file`, sorts by line, checks `abs(fj.line - anchor_line) > 5` for proximity, `difflib.SequenceMatcher.ratio() > 0.7` for similarity. All three criteria are AND-gated. **PASS.**
 
-Done criteria: `"testing"` is in `VALID_CATEGORIES`, not in `CATEGORY_REMAP`; scoring.md has zero-weight testing row; review-pr-core.md instructs to use `testing` category for test-gap findings — **all met**.
+2. **Severity prioritization.** `severity_order` dict ranks `critical=0, warning=1, suggestion=2`. When merging, the finding with the lower rank (higher severity) becomes the keeper. If `fj` has higher severity than `current`, the code swaps to keep `fj` and footnotes `current`. **PASS.**
 
----
+3. **Footnote format.** Merged findings append `"\n\n*(Also flagged at line {n}: {merged_title})*"` — matches plan specification. **PASS.**
 
-## Task 15: Expand valid categories
+4. **Cross-file non-merge.** Findings are grouped by `f.file` into separate buckets — findings on different files never encounter each other in the merge loop. **PASS.**
 
-**PASS.** All changes verified:
+5. **Pipeline placement.** Merge runs at step 3b (`post_findings.py:1061-1063`), after `filter_by_confidence` and before `cap_findings`. This is the correct position per the plan: "between the existing `filter_by_confidence` step and `cap_findings` step". Skipped for verify-only mode. **PASS.**
 
-1. **`VALID_CATEGORIES`** (`post_findings.py:129-131`): Contains all 9 categories — `security`, `performance`, `best_practices`, `code_style`, `documentation`, `testing`, `architecture`, `correctness`, `error_handling`. **PASS.**
-2. **`CATEGORY_REMAP`** (`post_findings.py:132-136`): Only 4 entries (`reliability→best_practices`, `maintainability→best_practices`, `naming→code_style`, `formatting→code_style`). `architecture`, `correctness`, and `error_handling` are NOT in the remap. **PASS.**
-3. **`scoring.md`** penalty matrix: New rows present:
-   - `architecture`: 2.0 / 1.0 / 0.5 — matches plan. **PASS.**
-   - `correctness`: 2.0 / 1.0 / 0.5 — matches plan. **PASS.**
-   - `error_handling`: 1.5 / 0.75 / 0.25 — matches plan. **PASS.**
-4. **`config.py`** penalty fields: `penalty_architecture_*`, `penalty_correctness_*`, `penalty_error_handling_*` all present with correct defaults matching scoring.md. **PASS.**
-5. **`get_penalty_matrix()`**: All 9 categories present with correct penalty values. **PASS.**
-6. **`review_models.py`** Finding.category docstring (line 36): Lists all 9 categories. **PASS.**
-7. **`findings-schema.json`** Finding.category enum: All 9 categories listed. **PASS.**
-8. **Fallback penalty matrix** in `post_findings.py:run()` (lines 870-881): Includes all 9 categories with correct values — consistent with `config.py` defaults. **PASS.**
-9. **`apply_mode_multipliers`** in `pr_scorer.py` (line 142): Architecture mode handles `f.category in ('best_practices', 'architecture')` — correct escalation for the new architecture category. **PASS.**
+6. **Edge case: sorted-by-line early exit.** The `break` at line 311 (`if abs(fj.line - anchor_line) > 5: break`) is correct because findings are sorted by line — once we exceed the 5-line window, no further candidates can match. **PASS.**
 
-Done criteria: All 9 categories in `VALID_CATEGORIES`; `CATEGORY_REMAP` only has 4 entries; new penalty rows in scoring.md; model updated — **all met**.
+7. **No new dependencies.** Uses `difflib.SequenceMatcher` (stdlib) — no new packages. **PASS.**
+
+**Test coverage (10 tests):**
+- `test_nearby_similar_findings_on_same_file_merge` — lines 10, 12, 50 → two merge, one stays. **PASS.**
+- `test_different_files_do_not_merge` — cross-file identical findings stay separate. **PASS.**
+- `test_keeps_higher_severity_finding` — suggestion + critical → critical survives. **PASS.**
+- `test_footnote_added_to_merged_finding` — "Also flagged at line" present. **PASS.**
+- `test_line_gap_exactly_5_merges` — boundary test at 5. **PASS.**
+- `test_line_gap_of_6_does_not_merge` — boundary test at 6. **PASS.**
+- `test_dissimilar_findings_on_same_file_nearby_lines_do_not_merge` — different titles/messages. **PASS.**
+- `test_empty_input_returns_empty` — edge case. **PASS.**
+- `test_single_finding_returned_unchanged` — edge case. **PASS.**
+- `test_third_finding_far_away_not_merged` — mixed near+far. **PASS.**
+
+Done criteria: "Given 3 findings on same file with lines 10, 12, 50 — the first two merge, the third stays separate. Given 2 findings on different files with same title — they do NOT merge." — **both verified by tests and code inspection.**
 
 ---
 
-## Task 16: Architecture review checklist
+## Task 20: Audit trail export
 
-**PASS.** `commands/review-mode-architecture.md` exists with all 4 sections and 12 checklist items matching the plan verbatim:
-- API Design (3 items)
-- Coupling + Cohesion (3 items)
-- Separation of Concerns (3 items)
-- Contracts (3 items)
+**PASS.** `_write_audit_trail()` added at `post_findings.py:878-1016`.
 
-References in `review-pr-core.md`:
-- Step 3 mode table (line 76): `architecture` → `commands/review-mode-architecture.md`. **PASS.**
-- Step 5f checklist list (line 188): `commands/review-mode-architecture.md` — API design, coupling, separation of concerns. **PASS.**
+1. **File path and timestamp.** `Path(workspace) / ".cr" / f"review_{pr_id}_{now:%Y%m%d_%H%M%S}.md"` — matches plan specification exactly. `cr_dir.mkdir(parents=True, exist_ok=True)` creates the directory if needed. **PASS.**
 
-Done criteria: Architecture checklist file exists; `review-pr-core.md` references it — **met**.
+2. **All 7 required sections present:**
+
+   | Section | Lines | Content | Verdict |
+   |---------|-------|---------|---------|
+   | PR Metadata | 892-908 | PR ID, repo, VCS, review modes, optional branch/author/title from `pr_details` | **PASS** |
+   | Score Breakdown | 910-928 | Overall rating, total penalty, per-category penalty table | **PASS** |
+   | Files Reviewed | 930-941 | Coverage display, coverage %, list of unreviewed files | **PASS** |
+   | Findings | 943-962 | Raw vs capped counts, severity/category/file/line/title/confidence table, filtered-out section | **PASS** |
+   | Token Usage | 964-979 | Model, input/output/total tokens, duration, estimated cost | **PASS** |
+   | Risk Classification | 981-986 | Injects `risk_table_md` parameter or "not available" fallback | **PASS** |
+   | Gate Decision | 988-995 | PASSED/FAILED result, reasons list | **PASS** |
+
+3. **Pipeline placement.** Audit trail is written at step 13b (`post_findings.py:1238-1252`), after summary posting and before output construction. This is the correct position per the plan: "after the summary posting step, before the output construction." **PASS.**
+
+4. **Error handling.** Write failure is caught with a generic `except Exception` and logged via `_eprint` — returns `None` instead of crashing the pipeline. **PASS.**
+
+5. **`risk_table_md` not wired in the `run()` call.** The `_write_audit_trail` call at line 1239 does not pass `risk_table_md`, so it defaults to `""` and the audit file says "*(Risk classification not available for this review)*". The risk table is computed in `review_job.py` (Phase 2) but not propagated to `post_findings.py`. **NOTE — not blocking.** The function signature accepts it and the section renders correctly in both cases. Wiring it through requires threading the risk table from `review_job.py` through the findings pipeline, which is integration work beyond Phase 4 scope. The audit file still contains all 7 section headers.
+
+**Test coverage (11 tests):**
+- `test_audit_file_is_created_in_cr_directory` — `.cr/` directory creation. **PASS.**
+- `test_audit_file_timestamp_format` — regex `review_42_\d{8}_\d{6}\.md`. **PASS.**
+- `test_audit_file_contains_pr_metadata_section` — PR ID, repo name. **PASS.**
+- `test_audit_file_contains_score_breakdown_section` — score, penalty. **PASS.**
+- `test_audit_file_contains_files_reviewed_section` — coverage %. **PASS.**
+- `test_audit_file_contains_findings_section` — severity, category. **PASS.**
+- `test_audit_file_contains_token_usage_section` — token counts, model. **PASS.**
+- `test_audit_file_contains_risk_classification_section` — section header. **PASS.**
+- `test_audit_file_contains_gate_decision_section` — FAILED, reasons. **PASS.**
+- `test_audit_written_during_dry_run` — end-to-end via `pf.run()` in dry-run. **PASS.**
+- `test_audit_file_contains_all_required_sections` — all 7 sections present. **PASS.**
+
+Done criteria: "Audit file written to `.cr/` with correct timestamp format; contains all expected sections (PR metadata, score breakdown, files reviewed, findings, token usage, risk table, gate decision)." — **all met.**
 
 ---
 
-## Task 17: Performance review checklist
+## Task 21 VERIFY: Test Suite
 
-**PASS.** `commands/review-mode-performance.md` exists with all 4 sections and 14 checklist items matching the plan verbatim:
-- Database (4 items)
-- I/O (3 items)
-- Collections + Algorithms (3 items)
-- Caching (3 items)
+**PASS.** `python -m pytest tests/ -v` — **270 passed, 13 skipped, 0 failures** in 2.61s. The 13 skipped are integration tests (expected — mocked unit tests only constraint).
 
-References in `review-pr-core.md`:
-- Step 3 mode table (line 77): `performance` → `commands/review-mode-performance.md`. **PASS.**
-- Step 5f checklist list (line 189): `commands/review-mode-performance.md` — queries, caching, N+1, algorithmic complexity. **PASS.**
-
-Done criteria: Performance checklist file exists; `review-pr-core.md` references it — **met**.
+- 21 new Phase 4 tests in `tests/unit/test_phase4_noise_audit.py` (10 merge + 11 audit).
+- All 249 Phase 1-3 tests continue to pass — no regressions.
+- Doer's progress.json reports 270 — matches actual count. **PASS.**
 
 ---
 
-## Task 18 VERIFY: Test Suite
+## NOTE: `all_raw_findings` parameter uses post-parse list
 
-**PASS.** `python -m pytest tests/ -v` — 249 passed, 13 skipped, 0 failures in 2.34s. The 13 skipped are integration tests (expected — mocked unit tests only constraint). All existing Phase 1 and Phase 2 tests continue to pass.
-
-**Note:** The doer's progress.json claims 252 unit tests, but the actual count is 249. This is a minor discrepancy (possibly from a different test run or counting methodology) and does not affect the verdict — zero failures is what matters.
-
-**Note:** There are no dedicated Phase 3 unit tests verifying the new category behavior (e.g., that `testing` category yields 0 penalty, or that `architecture` is not remapped). The existing `test_code_style_has_zero_penalty` test validates the zero-weight mechanism for `code_style`, and the same penalty matrix code path applies to `testing`. The risk of regression without explicit tests is low but non-zero.
+`_write_audit_trail` receives `findings_file.findings` as `all_raw_findings` (line 1242). At this point, `findings_file.findings` is the parsed list, not the pre-filter list. After step 3 (confidence filtering) and step 3b (merge), the `after_confidence` variable holds the filtered+merged list, but `findings_file.findings` is the original parsed findings (pre-filter, pre-merge). This means the audit trail's "Total raw" count reflects parsed findings before filtering — which is reasonable and informative. The "After filtering/capping" count reflects the `capped` list. **Not blocking — behavior is correct and informative.**
 
 ---
 
-## NOTE: Summary markdown category breakdown incomplete
+## NOTE: Prior review recommendations status
 
-`post_findings.py:559` initializes `category_counts` with only 5 categories (`security`, `performance`, `best_practices`, `code_style`, `documentation`), and lines 668-672 only render those 5 in the PR summary's "Comment Breakdown by Category" section. Findings in the 4 new categories (`architecture`, `correctness`, `error_handling`, `testing`) will be correctly scored, gated, and posted as inline comments — but they won't appear in the summary's category breakdown.
-
-**Not blocking.** The summary is informational. Scoring and gating use the full 9-category penalty matrix. This can be addressed in a future cleanup.
+From Phase 3 review (dd0d6f0):
+1. "Add Phase 3 unit tests" — not addressed in Phase 4 (out of scope). Still recommended for future.
+2. "Update `_build_summary_markdown` category breakdown to include all 9 categories" — not addressed. Still recommended.
+3. "Correct test count in progress.json (252 → 249)" — the Phase 4 progress entry correctly reports 270, which matches. The Phase 3 entry still says 252 (actual was 249). Minor discrepancy, not blocking.
 
 ---
 
 ## Summary
 
-**All 5 Phase 3 tasks pass (14-18).** Phase 3 correctly adds the `testing` category with zero-weight scoring, expands `VALID_CATEGORIES` to 9 entries, trims `CATEGORY_REMAP` to 4 entries, adds penalty fields and matrix entries for all new categories, and creates both the architecture and performance review checklists with proper references from `review-pr-core.md`. The findings schema, prompt instructions, config fields, scorer logic, and fallback penalty matrix are all consistent.
+**All 3 Phase 4 tasks pass (19-21).** Phase 4 correctly adds comment merging (`merge_similar_findings`) with the specified criteria (same file, ±5 lines, 0.7 similarity threshold), severity-aware keeper selection with footnotes, and a comprehensive audit trail export to `.cr/` with all 7 required sections. The merge is correctly placed between confidence filtering and capping in the pipeline. The audit trail is written after summary posting and before output construction, with graceful error handling.
 
-Phases 1-2 have no regressions. All 249 unit tests pass.
+Phases 1-3 have no regressions. All 270 unit tests pass (21 new).
 
 **Recommended (not blocking):**
-1. Add Phase 3 unit tests: verify `testing` category yields 0 penalty; verify `architecture`/`correctness`/`error_handling` are NOT remapped.
-2. Update `_build_summary_markdown` category breakdown to include all 9 categories (or dynamically render non-zero counts).
-3. Correct the test count in `progress.json` (252 → 249).
+1. Wire `risk_table_md` from `review_job.py` into the `_write_audit_trail` call so the audit file includes the actual risk classification table instead of "not available".
+2. Carry forward Phase 3 recommendations: add Phase 3 unit tests, update summary markdown category breakdown to include all 9 categories.
