@@ -33,6 +33,99 @@ from smart_diff import summarize_diff, format_summary_for_agent
 logger = logging.getLogger("codehawk.review_job")
 
 
+def _filter_rules_for_version(rules_text: str, lang: str, frameworks: dict) -> str:
+    """
+    Filter a lang-rules markdown file to only include sections applicable to the
+    detected version. Always includes "All Versions" sections. Version-specific
+    sections (e.g. ".NET 8+", "Python 3.10+") are included only when the detected
+    version meets or exceeds the section's version requirement.
+
+    Returns the filtered markdown string (empty string if nothing applicable).
+    """
+    import re as _re
+
+    lines = rules_text.splitlines()
+    output: list[str] = []
+    in_section = True  # top-level content is always included
+    current_section_included = True
+
+    def _section_applies(heading: str) -> bool:
+        """Decide if a ## heading's version section should be included."""
+        heading_lower = heading.lower()
+        # "All Versions" and "All" sections always apply
+        if "all versions" in heading_lower or heading_lower.strip("# ").startswith("all"):
+            return True
+        return _version_heading_matches(heading, lang, frameworks)
+
+    for line in lines:
+        if line.startswith("## "):
+            current_section_included = _section_applies(line)
+            if current_section_included:
+                output.append(line)
+        elif current_section_included:
+            output.append(line)
+
+    return "\n".join(output).strip()
+
+
+def _version_heading_matches(heading: str, lang: str, frameworks: dict) -> bool:
+    """Return True if the version heading applies given detected framework versions."""
+    import re as _re
+
+    # Extract a version requirement like ".NET 8+", "Python 3.10+", "TS 5.x", etc.
+    heading_clean = heading.lstrip("# ").strip()
+
+    # Patterns like "3.10+" or "8+"
+    req_match = _re.search(r"(\d+(?:\.\d+)?)[\s]*\+", heading_clean)
+    if not req_match:
+        # Section like "Edition 2021", "TS 4.x" — include by default (version-specific but not gate-able)
+        return True
+
+    req_ver_str = req_match.group(1)
+
+    def _parse(v: str) -> tuple:
+        parts = v.lstrip("^~>=<! ").split(".")
+        result = []
+        for p in parts[:3]:
+            try:
+                result.append(int(p))
+            except ValueError:
+                break
+        return tuple(result)
+
+    req_ver = _parse(req_ver_str)
+
+    # Determine which detected version to compare against based on language and heading keywords
+    heading_lower = heading_clean.lower()
+    detected_ver_str = ""
+
+    if lang == "csharp" or ".net" in heading_lower:
+        detected_ver_str = frameworks.get("dotnet", "")
+    elif lang == "python" or "python" in heading_lower:
+        detected_ver_str = frameworks.get("python", "")
+    elif lang in ("javascript", "typescript") or "ts" in heading_lower:
+        detected_ver_str = frameworks.get("typescript", "")
+    elif lang == "java" or "java" in heading_lower:
+        detected_ver_str = frameworks.get("java", "")
+    elif lang == "go" or "go" in heading_lower:
+        detected_ver_str = frameworks.get("go", "")
+    elif lang == "rust" or "edition" in heading_lower:
+        # For Rust editions compare edition year
+        detected_ver_str = frameworks.get("edition", "")
+    else:
+        # No version info available — include the section
+        return True
+
+    if not detected_ver_str:
+        return True  # version unknown — include to be safe
+
+    detected_ver = _parse(detected_ver_str)
+    if not detected_ver or not req_ver:
+        return True
+
+    return detected_ver >= req_ver
+
+
 def _extract_title_from_comment(comment_text: str) -> str:
     """Extract bold title from structured comment markdown."""
     import re
@@ -507,10 +600,15 @@ class ReviewJob:
         return text
 
     def _build_config_section(self) -> str:
-        """Pre-load project config files so the agent doesn't waste turns reading them."""
+        """Pre-load project config files so the agent doesn't waste turns reading them.
+
+        If .codereview.md is present, load it (project-specific rules take precedence).
+        If not, run stack detection and inject version-filtered lang-rules.
+        """
         config_files = [".codereview.md", ".codereview.yml", "AGENTS.md"]
         lines = ["", "---", "", "## Pre-loaded Project Config", ""]
 
+        has_codereview_md = False
         found_any = False
         for name in config_files:
             path = self.config.workspace / name
@@ -521,8 +619,17 @@ class ReviewJob:
                     lines.append(f"```\n{content}\n```")
                     lines.append("")
                     found_any = True
+                    if name == ".codereview.md":
+                        has_codereview_md = True
                 except Exception:
                     pass
+
+        if not has_codereview_md:
+            # Auto-detect stack and inject version-appropriate rules
+            lang_rules = self._build_lang_rules_section()
+            if lang_rules:
+                lines.extend(lang_rules)
+                found_any = True
 
         if not found_any:
             lines.append("No project config files found (.codereview.md, .codereview.yml, AGENTS.md).")
@@ -532,6 +639,62 @@ class ReviewJob:
         lines.append("Do NOT call `read_local_file` for these config files — they are already loaded above (or confirmed missing).")
         lines.append("")
         return "\n".join(lines)
+
+    def _build_lang_rules_section(self) -> list[str]:
+        """Run stack detection and return prompt lines with injected lang rules."""
+        try:
+            import stack_detector as sd
+            profile = sd.detect(self.config.workspace)
+        except Exception as exc:
+            logger.warning("Stack detection failed: %s", exc)
+            return []
+
+        if not profile.languages:
+            return []
+
+        # Build version summary string for each detected language
+        lang_summaries = []
+        for lang in profile.languages:
+            fw = profile.frameworks.get(lang, {})
+            if fw:
+                fw_str = ", ".join(f"{k}={v}" for k, v in fw.items())
+                lang_summaries.append(f"{lang} ({fw_str})")
+            else:
+                lang_summaries.append(lang)
+
+        lines = [
+            f"### Auto-detected Stack",
+            "",
+            f"Detected: {', '.join(lang_summaries)}",
+            f"Config files read: {', '.join(profile.detected_from) if profile.detected_from else 'none'}",
+            "",
+            "The following language-specific review rules apply:",
+            "",
+        ]
+
+        commands_dir = Path(__file__).resolve().parent.parent / "commands"
+        rules_injected = 0
+
+        for lang in profile.languages:
+            rules_file = commands_dir / "lang-rules" / f"{lang}.md"
+            if not rules_file.is_file():
+                continue
+            try:
+                full_rules = rules_file.read_text(encoding="utf-8")
+                fw = profile.frameworks.get(lang, {})
+                filtered = _filter_rules_for_version(full_rules, lang, fw)
+                if filtered:
+                    lines.append(filtered)
+                    lines.append("")
+                    rules_injected += 1
+            except Exception as exc:
+                logger.debug("Failed to load rules for %s: %s", lang, exc)
+
+        if rules_injected == 0:
+            return []
+
+        logger.info("Injected lang-rules for: %s", ", ".join(profile.languages[:rules_injected]))
+        return lines
 
     def _build_changed_files_section(self, file_changes, skipped_count: int = 0) -> str:
         """Build the pre-fetched PR data section to append to the prompt."""

@@ -15,10 +15,12 @@ The findings.json schema is defined in `commands/findings-schema.json`. Your out
 
 ## Step 1 — Load Project Context
 
+If `.codereview.md` exists, load it — project-specific rules always take precedence. Otherwise, the system reads your project config files (package.json, *.csproj, go.mod, etc.) to detect exact framework versions and injects version-appropriate review rules automatically. The detected stack and active rules are shown in the **"Pre-loaded Project Config"** section below.
+
 Read the following files if they exist in `/workspace/`. Skip missing files silently.
 
 ```
-/workspace/.codereview.md    # Project coding conventions and focus areas
+/workspace/.codereview.md    # Project coding conventions and focus areas (overrides auto-detection)
 /workspace/.codereview.yml   # Gate thresholds (min_star_rating, fail_on_critical)
 /workspace/AGENTS.md         # Agent configuration for this repo
 ```
