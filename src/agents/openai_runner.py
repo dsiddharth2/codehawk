@@ -83,8 +83,7 @@ SMART DIFF DRILL-IN:
 TURN EFFICIENCY:
 - Do NOT read config files (.codereview.md, .codereview.yml, AGENTS.md) — they are pre-loaded in the prompt.
 - Do NOT call `get_file_diff`, `get_change_analysis`, `get_blast_radius`, or `get_pr` — all data is pre-injected.
-- Only use tool calls when you need information NOT in the prompt (e.g., full file context, caller relationships).
-- Your goal: review all pre-injected diffs and produce findings with ZERO or minimal tool calls.
+- You have 40 tool calls available. Use `read_local_file` or `get_file_content` when you need full-file context to verify a finding. Use `get_callers` to check blast radius on high-risk changes. The pre-injected diffs save you from fetching diffs — but reading full files for verification is expected and encouraged. Spend your turns where they matter most: verify before flagging, prioritize high-risk files, and ensure every file in your batch is covered.
 
 When you have completed your review, output the findings JSON as your final message. \
 Do NOT attempt to write files — just output the JSON directly in a ```json code fence. \
@@ -197,6 +196,8 @@ class OpenAIAgentRunner:
                     model=self.model,
                     messages=messages,
                     tools=tool_defs,
+                    temperature=0.3,
+                    seed=42,
                 )
             except Exception as e:
                 logger.error("API call failed: %s", e)
@@ -328,6 +329,7 @@ class OpenAIAgentRunner:
                     "model": self.model,
                     "instructions": build_system_prompt(max_turns, self.has_graph),
                     "tools": tool_defs,
+                    "temperature": 0.3,
                 }
                 if previous_response_id:
                     kwargs["previous_response_id"] = previous_response_id

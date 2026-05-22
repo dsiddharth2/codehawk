@@ -159,9 +159,9 @@ class ReviewJob:
 
         # Pre-compute graph analysis and fetch all diffs to inject into prompt
         analysis = self._pre_compute_analysis(graph_store, changed_file_paths)
-        diffs = self._pre_fetch_diffs(changed_file_paths, source_commit, target_commit)
-        if analysis or diffs:
-            prompt += self._build_review_context(analysis, diffs, changed_files)
+        diffs, failed_diffs = self._pre_fetch_diffs(changed_file_paths, source_commit, target_commit)
+        if analysis or diffs or failed_diffs:
+            prompt += self._build_review_context(analysis, diffs, changed_files, failed_diffs)
 
         runner = OpenAIAgentRunner(
             settings=self.settings,
@@ -274,16 +274,17 @@ class ReviewJob:
 
     def _pre_fetch_diffs(
         self, file_paths: list[str], source_commit: str, target_commit: str
-    ) -> dict[str, str]:
-        """Fetch diffs for all files in one go. Returns {path: diff_text}."""
+    ) -> tuple[dict[str, str], list[str]]:
+        """Fetch diffs for all files in one go. Returns ({path: diff_text}, failed_paths)."""
         if not source_commit or not target_commit:
             logger.warning("Cannot pre-fetch diffs: missing commit SHAs")
-            return {}
+            return {}, []
 
         from activities.fetch_file_diff_activity import FetchFileDiffActivity, FetchFileDiffInput
 
         diff_activity = FetchFileDiffActivity(settings=self.settings)
         diffs: dict[str, str] = {}
+        failed_diffs: list[str] = []
         threshold_kb = 30
 
         for fp in file_paths:
@@ -304,12 +305,15 @@ class ReviewJob:
                     diffs[fp] = diff_text
             except Exception as exc:
                 logger.warning("Failed to pre-fetch diff for %s: %s", fp, exc)
+                failed_diffs.append(fp)
 
         logger.info("Pre-fetched diffs for %d/%d files", len(diffs), len(file_paths))
-        return diffs
+        if failed_diffs:
+            logger.warning("Failed to pre-fetch diffs for %d file(s): %s", len(failed_diffs), failed_diffs)
+        return diffs, failed_diffs
 
     def _build_review_context(
-        self, analysis: dict, diffs: dict[str, str], changed_files
+        self, analysis: dict, diffs: dict[str, str], changed_files, failed_diffs: list[str] | None = None
     ) -> str:
         """Build a markdown context block with analysis + diffs for prompt injection."""
         lines = ["", "---", "", "## Pre-computed Review Context", ""]
@@ -355,6 +359,17 @@ class ReviewJob:
 
         if not analysis and not diffs:
             lines.append("_No pre-computed context available. Use tools to fetch diffs and analysis._")
+
+        if failed_diffs:
+            lines.append("### Failed Diff Fetches")
+            lines.append("")
+            lines.append(
+                "The following files could not be pre-fetched. You MUST fetch them via "
+                "`read_local_file` or `get_file_content` during review: "
+                + ", ".join(f"`{fp}`" for fp in failed_diffs)
+                + ". These files still count toward 100% coverage."
+            )
+            lines.append("")
 
         lines.append("Do NOT call `get_change_analysis`, `get_blast_radius`, or `get_file_diff` — all data is above.")
         lines.append("Use `get_callers` or `get_file_content` only if you need additional context for a specific finding.")
