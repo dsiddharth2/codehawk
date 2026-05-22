@@ -54,8 +54,7 @@ Use the review priorities to plan your review order: high-risk files first, then
 
 Flag missing test coverage from the test gaps list as findings. Use category `testing` (not `best_practices`) for all test-gap findings. These are informational — they appear as inline comments but do not affect the CI gate or star rating.
 
-To read existing review threads (for fix verification in Step 6 only):
-- Use the `list_threads` tool
+Fix verification of prior findings is handled automatically by the system — do not call `list_threads`.
 
 ---
 
@@ -120,7 +119,7 @@ T1-T5 sets the overall strategy (e.g., T5 = use repomix, prioritize by churn). R
 
 ## Step 5 — Review Each Changed File
 
-> **Re-push note:** If this is a re-push (Step 6a detects existing cr-id threads), run Step 6a NOW to collect prior cr-ids and the delta diff (Step 6b), then return here. Review only the lines in `git diff <PRIOR_HEAD_SHA>..<CURRENT_HEAD_SHA>` — do not re-flag existing code that was already reviewed.
+> **Re-push note:** On a re-push, review only the lines changed since the prior review — do not re-flag existing code. Fix verification of prior findings is handled automatically by the system.
 
 **Tier-based review depth — apply your tier from Step 4:**
 
@@ -210,66 +209,11 @@ Do **not** flag: patterns the developer marked with `# cr: intentional`, or patt
 
 ## Step 6 — Fix Verification (Re-push Path)
 
-> This step applies only when the PR has existing review threads from a prior run. Skip this step on first review.
+> Fix verification is handled automatically by the system after your review completes. Do not attempt to verify old findings — focus on reviewing the current code.
 
-### 6a — Detecting a re-push
+The system's `fix_verifier.py` module determines for each prior finding whether it is `fixed`, `still_present`, or `not_relevant` using deterministic file-diff checks and targeted LLM calls. Results are posted to ADO threads automatically.
 
-Check whether the prompt contains a **"Previous Review Findings (Pre-fetched)"** section.
-
-- If present: this is a **re-push**. Prior findings are pre-injected. Do NOT call `list_threads`.
-- If not present: this is a **first-push**. Skip Steps 6b-6d entirely and proceed to Step 7.
-
-### 6b — Identify what changed
-
-Use the pre-injected diffs to see what changed. Your new `findings[]` must only flag issues
-in the current changes. Do not re-flag code from prior review (handle via `fix_verifications[]`).
-
-### 6c — Classify each prior finding
-
-For each prior `cr_id` from the pre-injected "Previous Review Findings" table, check the current code at the specified file/line and apply these rules **in order**:
-
-**`not_relevant`** — assign this status if ANY of the following are true:
-- The file containing the finding was deleted in this PR
-- The file was renamed or moved (use `git diff --name-status` to detect)
-- The finding's line number is now in a completely different function or class (structural refactor moved the code)
-- The finding was in a region marked `# cr: intentional` or `# cr: ignore-block`
-
-**`fixed`** — assign this status if ALL of the following are true:
-- The file still exists at the same path
-- You read the file at the finding's original line (±5 lines to account for minor shifts)
-- The specific problematic pattern described in the finding is no longer present
-- Example: finding was "SQL injection at line 42" → line 42 now uses parameterized queries → `fixed`
-
-**`still_present`** — assign this status if:
-- The file exists and the problematic pattern remains at (or very near) the original line
-- The code has been changed but the underlying issue persists (e.g., a different unsanitized variable is now used instead)
-
-Use the pre-injected diffs and `get_file_content` (if needed) to check the current state of the code at the finding's location. Compare what you see against what the finding described.
-
-### 6d — Write fix_verifications[]
-
-For each prior `cr_id`, write one entry into `fix_verifications[]`:
-
-```json
-{
-  "cr_id": "cr-001",
-  "status": "fixed",
-  "reason": "Line 42 now uses cursor.execute with parameterized query — SQL injection path eliminated."
-}
-```
-
-| Field | Required | Values |
-|-------|----------|--------|
-| `cr_id` | yes | The prior cr-id exactly (e.g., `cr-001`) |
-| `status` | yes | `fixed`, `still_present`, or `not_relevant` |
-| `reason` | yes | One sentence explaining the classification decision |
-
-**Important:** Phase 2 (`post_findings.py`) will automatically:
-- Resolve/close threads for `fixed` items
-- Leave `still_present` threads open
-- Post a before/after score comparison in the PR summary
-
-You do not need to post any comments yourself — only write `fix_verifications[]` in findings.json.
+On a re-push, your `findings[]` must only flag issues visible in the **current** changes. Do not re-flag code that was already reviewed in a prior run.
 
 ---
 

@@ -30,8 +30,8 @@
     {"id": 25, "phase": 5, "title": "Version-aware rules files (batch 2)", "type": "work", "status": "completed", "notes": "commands/lang-rules/: rust.md, cpp.md, swift.md, android.md, ruby.md, php.md, sql.md — 30-50 items each with version sections"},
     {"id": 26, "phase": 5, "title": "Integration into review_job.py", "type": "work", "status": "completed", "notes": "review_job.py: _build_lang_rules_section + _filter_rules_for_version + _version_heading_matches; file_filter.py: registry lookup via load_registered_extensions; review-pr-core.md Step 1 updated"},
     {"id": 27, "phase": 5, "title": "VERIFY: Language Intelligence", "type": "verify", "status": "completed", "notes": "302 unit tests pass (32 new Phase 5 tests); all 15 lang-rules files >= 30 items; stack detector verified; version filtering verified; registry mode verified; pushed to origin feat/review-quality"},
-    {"id": 28, "phase": 6, "title": "Fix verifier", "type": "work", "status": "pending", "notes": ""},
-    {"id": 29, "phase": 6, "title": "Parallel batch execution", "type": "work", "status": "pending", "notes": ""},
-    {"id": 30, "phase": 6, "title": "VERIFY: Fix Verification + Parallelism", "type": "verify", "status": "pending", "notes": ""}
+    {"id": 28, "phase": 6, "title": "Fix verifier", "type": "work", "status": "completed", "notes": "src/fix_verifier.py created; handles deleted (not_relevant), unchanged (still_present), modified (LLM verify); 15-file cap with overflow batching; blast radius notes; posts to ADO; review-pr-core.md Step 6 updated"},
+    {"id": 29, "phase": 6, "title": "Parallel batch execution", "type": "work", "status": "completed", "notes": "batch_review_job.py: ThreadPoolExecutor max_workers=3; _run_batch_with_retry with exponential backoff (1s/2s/4s) on rate-limit errors"},
+    {"id": 30, "phase": 6, "title": "VERIFY: Fix Verification + Parallelism", "type": "verify", "status": "completed", "notes": "331 unit tests pass (29 new Phase 6 tests); all PLAN.md verify criteria met; pushed to origin feat/review-quality"}
   ]
 }
