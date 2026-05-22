@@ -1,121 +1,122 @@
 # Sprint 3 — Review Quality + Coverage Enforcement — Code Review
 
 **Reviewer:** local-codehawk-reviewer
-**Date:** 2026-05-22 21:45:00+05:30
+**Date:** 2026-05-22 23:15:00+05:30
 **Verdict:** APPROVED
 
 > See the recent git history of this file to understand the context of this review.
 
 ---
 
-## Phase 1 Regression Check
+## Phase 1–2 Regression Check
 
-**PASS.** Phase 1 (Tasks 1-6, approved in commit 63ebc04) was re-verified:
-- `temperature=0.3` present in both API call sites (`openai_runner.py:199`, `openai_runner.py:332`)
-- `seed=42` present in `_run_chat_completions` only (correct — Responses API doesn't support seed)
-- "ZERO or minimal" absent from `SYSTEM_PROMPT`
-- "max 10" absent from `review-pr-core.md`; "max 40" present in Step 0 constraints
-- Step 5e verify-before-CRITICAL present
-- `failed_diffs` injection recommends `read_local_file`/`get_file_content` only (no contradiction with line 374)
-- No regressions detected from Phase 2 changes.
-
----
-
-## Task 7: Risk Classifier
-
-**PASS.** `src/risk_classifier.py` implements the exact formula from PLAN.md with correct weights (0.25/0.25/0.15/0.15/0.10/0.10). Path sensitivity patterns match the plan (HIGH: auth/, crypto/, etc.; MEDIUM: services/, models/, etc.; LOW: tests/, docs/, etc.). Thresholds are configurable via function args and wired to `config.py` at the call site in `review_job.py:350-355`. Graceful degradation confirmed — when `graph_analysis` is None, `caller_count` and `no_test_coverage` default to 0.0. The `FileRisk` dataclass returns `risk`, `score`, and `reasons` as specified.
-
-Done criteria: `risk_classifier.classify(files)` returns HIGH/MEDIUM/LOW for a mock file list — **met** (10 unit tests verify this). Thresholds configurable in `config.py` — **met** (`risk_high_threshold=0.6`, `risk_medium_threshold=0.3` at `config.py:143-154`).
+**PASS.** Phases 1 (approved in 63ebc04) and 2 (approved in 5940338) re-verified against the Phase 3 commit (23d7d06). No regressions found:
+- `temperature=0.3` in both API call sites, `seed=42` in `_run_chat_completions` — unchanged.
+- "max 40 tool calls" in `review-pr-core.md` Step 0 — unchanged.
+- Step 5e verify-before-CRITICAL — present.
+- `failed_diffs` injection — correct wording, no contradictions.
+- `risk_classifier.py` — unchanged from Phase 2 approval.
+- `files_clean` in `findings-schema.json` — present (fixed in dad0a9e, verified in prior re-review).
+- Coverage gate hard/log modes — unchanged.
+- `batch_max_turns` default 40 — unchanged.
+- All 28 Phase 2 tests in `test_coverage_system.py` pass.
 
 ---
 
-## Task 8: Inject Risk Table into Prompt
+## Task 14: New `testing` category with zero-weight scoring
 
-**PASS.** `review_job.py:346-380` calls `risk_classifier.classify()` inside `_build_review_context` and injects a markdown table with the exact headers from the plan: `| File | Risk | Depth | Reason |`. The depth column maps correctly (HIGH → "Full review + verify", MEDIUM → "Diff review + read if needed", LOW → "Diff scan"). The table footer includes the mandatory instruction: "You MUST review every file above."
+**PASS.** All three changes verified:
 
-Done criteria: Risk classification table injected into review context prompt — **met**.
+1. **`VALID_CATEGORIES`** (`post_findings.py:129`): Contains `"testing"`. **PASS.**
+2. **`CATEGORY_REMAP`** (`post_findings.py:132-136`): Does NOT contain `"testing"` — correct, it was removed. Only 4 remap entries remain (`reliability`, `maintainability`, `naming`, `formatting`). **PASS.**
+3. **`scoring.md`** penalty matrix: `testing` row present with `0.0 | 0.0 | 0.0` — zero weight. **PASS.**
+4. **`config.py`** penalty fields: `penalty_testing_critical/warning/suggestion` all default to `0.0`. **PASS.**
+5. **`get_penalty_matrix()`** (`config.py:296-300`): Includes `testing` entry with all-zero penalties. **PASS.**
+6. **`review-pr-core.md`** Step 2 (line 53): "Use category `testing` (not `best_practices`) for all test-gap findings. These are informational — they appear as inline comments but do not affect the CI gate or star rating." — matches plan text. **PASS.**
+7. **`findings-schema.json`** Finding.category enum (line 99): Includes `"testing"`. **PASS.**
 
----
-
-## Task 9: Risk-Based Depth Instructions in Prompt
-
-**PASS.** `review-pr-core.md` Step 4, lines 106-115 contain the 100% coverage requirement and all three risk-tier depth instructions (HIGH/MEDIUM/LOW) matching the plan text verbatim. The budget instruction ("Budget your 40 turns wisely") and the T1-T5 + risk tier coexistence note are both present.
-
-Done criteria: Risk-based depth instructions and 100% coverage requirement in Step 4 — **met**.
-
----
-
-## Task 10: Add `files_clean[]` to Findings Schema
-
-**PARTIAL PASS — 1 FAIL item.**
-
-What works:
-- `review_models.py:245`: `files_clean: List[str] = field(default_factory=list)` — model field exists. **PASS.**
-- `review-pr-core.md:314`: Example JSON includes `"files_clean": [...]`. **PASS.**
-- `review-pr-core.md:319`: Instruction text includes `files_clean` requirement. **PASS.**
-- `post_findings.py:228`: `files_clean=data.get("files_clean", [])` — parsing works. **PASS.**
-
-**FAIL — `commands/findings-schema.json` not updated.** The JSON schema file has `"additionalProperties": false` (line 8) but does not define a `files_clean` property. When the agent writes `files_clean` into `findings.json` (as now instructed by the prompt), schema validation in `post_findings.py:839` (`_validate_schema`) will reject it and raise `SystemExit(1)`. This is a production-blocking bug — the pipeline will crash every time the agent follows the prompt instructions.
-
-**Fix:** Add `files_clean` to `findings-schema.json` properties:
-```json
-"files_clean": {
-  "type": "array",
-  "items": { "type": "string" },
-  "description": "Files reviewed with no findings — every code file must appear in either findings[].file or files_clean[]"
-}
-```
-
-**Doer:** fixed in commit dad0a9e — added `files_clean` array-of-strings property to `commands/findings-schema.json`; squashed into Phase 2 commit via `--fixup` + `--autosquash` rebase; force-pushed to `feat/review-quality`.
+Done criteria: `"testing"` is in `VALID_CATEGORIES`, not in `CATEGORY_REMAP`; scoring.md has zero-weight testing row; review-pr-core.md instructs to use `testing` category for test-gap findings — **all met**.
 
 ---
 
-## Task 11: Coverage Gate and Penalty
+## Task 15: Expand valid categories
 
-**PASS.** All five sub-changes verified:
+**PASS.** All changes verified:
 
-1. **Coverage calculation** (`post_findings.py:943-964`): Uses `files_with_findings | files_clean_set` as `files_reviewed_set`, divides by `total_code_files`. Backward-compatible: only fires coverage gate when `files_clean` key is present in the raw JSON (`agent_uses_coverage_tracking` flag at line 848). **PASS.**
+1. **`VALID_CATEGORIES`** (`post_findings.py:129-131`): Contains all 9 categories — `security`, `performance`, `best_practices`, `code_style`, `documentation`, `testing`, `architecture`, `correctness`, `error_handling`. **PASS.**
+2. **`CATEGORY_REMAP`** (`post_findings.py:132-136`): Only 4 entries (`reliability→best_practices`, `maintainability→best_practices`, `naming→code_style`, `formatting→code_style`). `architecture`, `correctness`, and `error_handling` are NOT in the remap. **PASS.**
+3. **`scoring.md`** penalty matrix: New rows present:
+   - `architecture`: 2.0 / 1.0 / 0.5 — matches plan. **PASS.**
+   - `correctness`: 2.0 / 1.0 / 0.5 — matches plan. **PASS.**
+   - `error_handling`: 1.5 / 0.75 / 0.25 — matches plan. **PASS.**
+4. **`config.py`** penalty fields: `penalty_architecture_*`, `penalty_correctness_*`, `penalty_error_handling_*` all present with correct defaults matching scoring.md. **PASS.**
+5. **`get_penalty_matrix()`**: All 9 categories present with correct penalty values. **PASS.**
+6. **`review_models.py`** Finding.category docstring (line 36): Lists all 9 categories. **PASS.**
+7. **`findings-schema.json`** Finding.category enum: All 9 categories listed. **PASS.**
+8. **Fallback penalty matrix** in `post_findings.py:run()` (lines 870-881): Includes all 9 categories with correct values — consistent with `config.py` defaults. **PASS.**
+9. **`apply_mode_multipliers`** in `pr_scorer.py` (line 142): Architecture mode handles `f.category in ('best_practices', 'architecture')` — correct escalation for the new architecture category. **PASS.**
 
-2. **Gate rule** (`post_findings.py:797-809`): `coverage_gate_mode="hard"` fails gate with correct message format. `"log"` mode appends a warning but does not fail. Both tested and verified. **PASS.**
-
-3. **Summary display** (`post_findings.py:534-541`, used at line 640): Shows `"X / Y (Z%)"` format for 100%, and `"X / Y (Z%) — N file(s) not reviewed"` for partial coverage. **PASS.**
-
-4. **Coverage penalty** (`pr_scorer.py:262-280`): `apply_coverage_penalty` adds `(1 - coverage_ratio) * 50` points. Full coverage returns unchanged score. Zero coverage adds exactly 50. Tests verify 0%, 50%, 62.5%, 100%. **PASS.**
-
-5. **Config fields** (`config.py:137-154`): `coverage_gate_mode: str = "hard"`, `risk_high_threshold: float = 0.6`, `risk_medium_threshold: float = 0.3` — all present with correct defaults and descriptions. **PASS.**
-
-Done criteria: All sub-items met.
-
----
-
-## Task 12: Align Batch Turn Budget to 40
-
-**PASS.** `config.py:126`: `batch_max_turns` default is `40` (was 15). `review-pr-core.md` references 40 turns consistently (Step 0: "max 40 tool calls", Step 4: "Budget your 40 turns wisely"). Grep of the entire codebase for turn/tool-call defaults confirms all production values are 40. Integration test cap of 15 (`tests/integration/conftest.py:30`) is correct — that's a test-only limit, not production.
-
-Done criteria: `batch_max_turns` default is 40; all codebase turn limits are 40 — **met**.
+Done criteria: All 9 categories in `VALID_CATEGORIES`; `CATEGORY_REMAP` only has 4 entries; new penalty rows in scoring.md; model updated — **all met**.
 
 ---
 
-## Task 13 VERIFY: Test Suite
+## Task 16: Architecture review checklist
 
-**PASS.** 249 tests passed, 13 skipped, 0 failures in 3.07s. The 28 new Phase 2 tests in `tests/unit/test_coverage_system.py` cover:
-- Risk classifier (10 tests): HIGH/MEDIUM/LOW classification, graph analysis, graceful degradation, configurable thresholds, string paths
-- files_clean parsing (3 tests): correct parsing, default to empty, model field existence
-- Coverage calculation (7 tests): 100% and 62.5% ratios, hard/log gate modes, display formatting
-- Coverage penalty (4 tests): 0%, 50%, 62.5%, 100% coverage scenarios
-- Config defaults (4 tests): batch_max_turns=40, coverage_gate_mode="hard", risk thresholds
+**PASS.** `commands/review-mode-architecture.md` exists with all 4 sections and 12 checklist items matching the plan verbatim:
+- API Design (3 items)
+- Coupling + Cohesion (3 items)
+- Separation of Concerns (3 items)
+- Contracts (3 items)
 
-Test quality is good — meaningful coverage of happy paths, edge cases, and the specific PLAN verification scenarios (5 findings + 3 clean = 100%, 5 findings + 0 clean = 62.5%). No redundant tests detected.
+References in `review-pr-core.md`:
+- Step 3 mode table (line 76): `architecture` → `commands/review-mode-architecture.md`. **PASS.**
+- Step 5f checklist list (line 188): `commands/review-mode-architecture.md` — API design, coupling, separation of concerns. **PASS.**
 
-**NOTE:** The schema validation gap (findings-schema.json missing `files_clean`) is not caught by the test suite because `test_files_clean_parsed_correctly` calls `_parse_findings_file` directly without running `_validate_schema` first. A test that runs the full `run_post_findings` path with `files_clean` in the input would have caught this.
+Done criteria: Architecture checklist file exists; `review-pr-core.md` references it — **met**.
+
+---
+
+## Task 17: Performance review checklist
+
+**PASS.** `commands/review-mode-performance.md` exists with all 4 sections and 14 checklist items matching the plan verbatim:
+- Database (4 items)
+- I/O (3 items)
+- Collections + Algorithms (3 items)
+- Caching (3 items)
+
+References in `review-pr-core.md`:
+- Step 3 mode table (line 77): `performance` → `commands/review-mode-performance.md`. **PASS.**
+- Step 5f checklist list (line 189): `commands/review-mode-performance.md` — queries, caching, N+1, algorithmic complexity. **PASS.**
+
+Done criteria: Performance checklist file exists; `review-pr-core.md` references it — **met**.
+
+---
+
+## Task 18 VERIFY: Test Suite
+
+**PASS.** `python -m pytest tests/ -v` — 249 passed, 13 skipped, 0 failures in 2.34s. The 13 skipped are integration tests (expected — mocked unit tests only constraint). All existing Phase 1 and Phase 2 tests continue to pass.
+
+**Note:** The doer's progress.json claims 252 unit tests, but the actual count is 249. This is a minor discrepancy (possibly from a different test run or counting methodology) and does not affect the verdict — zero failures is what matters.
+
+**Note:** There are no dedicated Phase 3 unit tests verifying the new category behavior (e.g., that `testing` category yields 0 penalty, or that `architecture` is not remapped). The existing `test_code_style_has_zero_penalty` test validates the zero-weight mechanism for `code_style`, and the same penalty matrix code path applies to `testing`. The risk of regression without explicit tests is low but non-zero.
+
+---
+
+## NOTE: Summary markdown category breakdown incomplete
+
+`post_findings.py:559` initializes `category_counts` with only 5 categories (`security`, `performance`, `best_practices`, `code_style`, `documentation`), and lines 668-672 only render those 5 in the PR summary's "Comment Breakdown by Category" section. Findings in the 4 new categories (`architecture`, `correctness`, `error_handling`, `testing`) will be correctly scored, gated, and posted as inline comments — but they won't appear in the summary's category breakdown.
+
+**Not blocking.** The summary is informational. Scoring and gating use the full 9-category penalty matrix. This can be addressed in a future cleanup.
 
 ---
 
 ## Summary
 
-**All 7 tasks pass.** The Task 10 schema issue flagged in the initial review (findings-schema.json missing `files_clean`) has been fixed — the doer added the `files_clean` array-of-strings property to `commands/findings-schema.json` in commit dad0a9e. Fix verified: schema JSON is valid, `files_clean` property is correctly defined with `type: array, items: string`, and all 249 tests pass (0 failures).
+**All 5 Phase 3 tasks pass (14-18).** Phase 3 correctly adds the `testing` category with zero-weight scoring, expands `VALID_CATEGORIES` to 9 entries, trims `CATEGORY_REMAP` to 4 entries, adds penalty fields and matrix entries for all new categories, and creates both the architecture and performance review checklists with proper references from `review-pr-core.md`. The findings schema, prompt instructions, config fields, scorer logic, and fallback penalty matrix are all consistent.
 
-Phase 1 has no regressions. Phase 2 is complete and ready for Phase 3.
+Phases 1-2 have no regressions. All 249 unit tests pass.
 
 **Recommended (not blocking):**
-1. Add an end-to-end test that validates a findings.json containing `files_clean` against the schema to prevent similar schema/model drift.
+1. Add Phase 3 unit tests: verify `testing` category yields 0 penalty; verify `architecture`/`correctness`/`error_handling` are NOT remapped.
+2. Update `_build_summary_markdown` category breakdown to include all 9 categories (or dynamically render non-zero counts).
+3. Correct the test count in `progress.json` (252 → 249).
