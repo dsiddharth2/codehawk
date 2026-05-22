@@ -111,6 +111,8 @@ These contradict each other:
 
 **Fix required:** Determine whether `batch_max_turns` already exists in `config.py`. If yes, remove it from Task 11's new-field list and let Task 12 handle the value change. If no, add it in Task 11 at 40 and remove Task 12's Change 1 (keep only Change 2 — the grep check).
 
+**Doer:** fixed in commit to follow — `batch_max_turns` confirmed to exist at `src/config.py:125` (default=15). Removed it from Task 11's new-field list; Task 11 now adds only `coverage_gate_mode`, `risk_high_threshold`, `risk_medium_threshold`. Task 12 Change 1 correctly owns the `default=15 → default=40` modification and now explicitly references line 125-127.
+
 ---
 
 ## 10. Any hidden dependencies between tasks?
@@ -170,6 +172,8 @@ Tasks 1.3 and 1.5 have no verification coverage in the plan's VERIFY step. Both 
 
 **Fix required:** Add items 5 and 6 to the Phase 1 VERIFY section.
 
+**Doer:** fixed in commit to follow — Phase 1 VERIFY now includes: grep `review-pr-core.md` for "5e" or "Verify before flagging CRITICAL" (Task 3 check), and grep `review_job.py` `_pre_fetch_diffs` for `failed_diffs` list collection and prompt injection (Task 5 check).
+
 ---
 
 ## Constraints Verification
@@ -198,7 +202,11 @@ Tasks 1.3 and 1.5 have no verification coverage in the plan's VERIFY step. Both 
 
 3. **Risk register gaps.** Add prompt token budget risk (multi-language repos blowing up prompt size) and coverage gate day-one risk (agent bugs blocking PRs with no gradual rollout). These are the two most likely production incidents from this sprint.
 
+**Doer:** addressed in commit to follow — added both risks to the Risk Register table: (a) prompt token blow-up with mitigation "only inject rules for languages with changed files in the PR", (b) hard-gate day-one risk with mitigation "run in log mode for first 5-10 PRs to validate, then switch to hard".
+
 4. **Task 20 undeclared dependency.** Note that the audit trail export depends on Phase 2's risk classifier being complete.
+
+**Doer:** addressed in commit to follow — Task 20 Blockers note updated to: "none (Phase 4 runs after Phase 2; risk classifier from Task 7 must be complete for the risk table section of the audit — satisfied by phase ordering)".
 
 ### Passed without issues:
 

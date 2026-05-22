@@ -57,11 +57,11 @@
 
 #### VERIFY: Prompt Alignment + Determinism
 - `python -m pytest tests/ -v` — MOCKED UNIT TESTS ONLY. Use unittest.mock / pytest-mock for ALL external dependencies (API calls, file I/O, etc). Do NOT run integration tests.
-- Grep `SYSTEM_PROMPT` for "ZERO or minimal" — must not appear
+- Grep `SYSTEM_PROMPT` in `openai_runner.py` for "ZERO or minimal" — must not appear
 - Grep `review-pr-core.md` for "max 10" — must not appear
-- Confirm `temperature=0.3` appears in both API call sites
-- Step 5e (verify-before-CRITICAL) exists in `review-pr-core.md`
-- Failed diffs surfacing logic exists in `review_job.py`
+- Confirm `temperature=0.3` appears in both `_run_chat_completions` and `_run_responses_api` call sites
+- Grep `review-pr-core.md` for "5e" or "Verify before flagging CRITICAL" — must appear (Task 3 verification)
+- Grep `review_job.py` `_pre_fetch_diffs` for `failed_diffs` — list must be collected and injected into prompt context when non-empty (Task 5 verification)
 
 ---
 
@@ -185,29 +185,28 @@
 
 - **Change 4 — Coverage penalty.** In `src/pr_scorer.py` — add coverage penalty method. For coverage below 100%, add penalty: `(1 - coverage_ratio) * 50`. This ensures incomplete reviews score poorly even if the gate mode is `"log"`.
 
-- **Change 5 — Config fields.** In `src/config.py` — add fields:
+- **Change 5 — Config fields.** In `src/config.py` — add three new fields (`batch_max_turns` already exists at default 15 and is updated separately in Task 12):
 
   ```python
   coverage_gate_mode: str = Field(default="hard", description="Coverage gate: hard (default) | log (debugging only)")
-  batch_max_turns: int = Field(default=40, description="Max turns per batch — must match MAX_TURNS")
   risk_high_threshold: float = Field(default=0.6)
   risk_medium_threshold: float = Field(default=0.3)
   ```
 
 - **Files:** `src/post_findings.py`, `src/pr_scorer.py`, `src/config.py`
 - **Tier:** standard
-- **Done when:** Coverage calculation uses `files_clean`; gate mode `"hard"` fails on incomplete coverage; `"log"` does not fail; summary shows `X / Y (Z%)`; coverage penalty applied in scorer; config fields added with correct defaults.
+- **Done when:** Coverage calculation uses `files_clean`; gate mode `"hard"` fails on incomplete coverage; `"log"` does not fail; summary shows `X / Y (Z%)`; coverage penalty applied in scorer; three new config fields added with correct defaults.
 - **Blockers:** Task 10
 
 #### Task 12: Align batch turn budget to 40
-- **Change 1:** In `src/config.py`, `batch_max_turns` field — change the default from `15` to `40`. The existing code has `batch_max_turns: int = 15` — this artificially limits batched reviews to 15 turns per batch while the deployment allows 40.
+- **Change 1:** In `src/config.py`, `batch_max_turns` field — change the existing `default=15` to `default=40`. The field already exists at line 125-127 of `src/config.py` (`batch_max_turns: int = Field(default=15, ge=5, ...)`). This change removes the artificial 15-turn cap per batch so every batch gets the full 40-turn deployment budget.
 
 - **Change 2:** In `commands/review-pr-core.md` — ensure no prompt text contradicts the 40-turn budget. Every context where the agent runs — single review, batched review, Claude wrapper — must say 40.
 
 - **Files:** `src/config.py`, `commands/review-pr-core.md`
 - **Tier:** standard
-- **Done when:** `config.py` `batch_max_turns` default is 40; grep entire codebase for turn/tool-call limits — every value must be 40.
-- **Blockers:** Task 11 (config fields added there)
+- **Done when:** `config.py` `batch_max_turns` default is 40 (not 15); grep entire codebase for turn/tool-call limits — every value must be 40.
+- **Blockers:** Task 11 (other new config fields added there; apply in same session)
 
 #### VERIFY: 100% Coverage System
 - `python -m pytest tests/ -v` — MOCKED UNIT TESTS ONLY. Use unittest.mock / pytest-mock for ALL external dependencies (API calls, file I/O, etc). Do NOT run integration tests.
@@ -389,7 +388,7 @@
 - **Files:** `src/post_findings.py`
 - **Tier:** standard
 - **Done when:** Audit file written to `.cr/` with correct timestamp format; contains all expected sections (PR metadata, score breakdown, files reviewed, findings, token usage, risk table, gate decision).
-- **Blockers:** none
+- **Blockers:** none (Phase 4 runs after Phase 2; risk classifier from Task 7 must be complete for the risk table section of the audit — satisfied by phase ordering)
 
 #### VERIFY: Noise Reduction + Audit
 - `python -m pytest tests/ -v` — MOCKED UNIT TESTS ONLY. Use unittest.mock / pytest-mock for ALL external dependencies (API calls, file I/O, etc). Do NOT run integration tests.
@@ -710,3 +709,5 @@
 | Rate limits with parallel batches (3 concurrent) | API rate limit errors under heavy load | Exponential backoff retry (1s, 2s, 4s, max 3 retries). 3 workers stays well within tier 3+ limits (~120 calls/min vs 5000 RPM). |
 | Monorepo per-directory profiles deferred | Multi-framework monorepos get root-config rules only | Root-config detection covers most repos. Per-directory profiles noted for future sprint. |
 | Fix verifier LLM calls add cost | Each re-review costs 1 LLM call per modified file | Capped at 18 calls max (15 individual + batched). Deterministic resolution handles deleted/unchanged files with zero LLM cost. |
+| Prompt token budget blow-up for multi-language repos | 15 lang-rules files × 30-50 items each could inject thousands of tokens in a full-stack repo (C#, TypeScript, React, SQL), crowding out diff context | Cap total injected rules tokens. Only inject rules for languages that have changed files in the PR — not for all detected languages in the repo. |
+| Coverage hard-gate blocking PRs on day one due to agent bugs | If the agent has an edge case (unrecognized file type, unrecovered diff fetch failure), the gate blocks the PR and ops must manually toggle to `"log"` mode | Run in `"log"` mode for the first 5-10 production PRs to validate agent file tracking, then switch to `"hard"` mode. |
