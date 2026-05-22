@@ -1,206 +1,213 @@
-# Review Modes — Phase 1 Code Review
+# Sprint 3: Review Quality + Coverage — Plan Review
 
 **Reviewer:** local-codehawk-reviewer
-**Date:** 2026-05-08
-**Verdict:** APPROVED
-
-> Phase 1: Foundation — Enum, Config, CLI
+**Date:** 2026-05-22T00:00:00+05:30
+**Verdict:** CHANGES NEEDED
 
 ---
 
-## Checklist
+## 1. Does every task have clear "done" criteria?
 
-| Item | Status | Notes |
-|------|--------|-------|
-| ReviewMode enum has FULL, VERIFY_FIXES, CHECK_NEW | PASS | `ReviewMode(str, Enum)` with correct values `"full"`, `"verify_fixes"`, `"check_new"` |
-| review_mode threaded through ReviewJobConfig | PASS | `review_mode: ReviewMode = ReviewMode.FULL` field present, default correct |
-| review_mode threaded through BatchReviewJob.__init__ | PASS | Accepted as kwarg, stored as `self.review_mode` |
-| CLI flags mutually exclusive via argparse | PASS | `add_mutually_exclusive_group()` used; passing both flags raises argparse error |
-| CHECK_NEW mode skips _fetch_previous_findings() | PASS | `batch_review_job.py:88-90` — conditional skip with log message |
-| review_mode passed to ALL ReviewJobConfig constructors | PASS | Both single-session path (line 117) and batched path (line 252) include `review_mode=self.review_mode` |
-| No regressions in existing behavior | PASS | 190 tests pass, 13 skipped (same as baseline) |
-| Code quality consistent with existing patterns | PASS | See notes below |
+**PASS.** Every task in the plan specifies grep-verifiable or output-verifiable "Done when" criteria. Examples of strong criteria: Task 1 ("Grep for 'max 10' returns zero matches; 'max 40' appears in Step 0"), Task 7 ("risk_classifier.classify(files) returns HIGH/MEDIUM/LOW for a mock file list"), Task 19 ("Given 3 findings on same file with lines 10, 12, 50 — the first two merge, the third stays separate"). No task leaves the implementer guessing what "done" means.
 
 ---
 
-## Code Quality Notes
+## 2. High cohesion within each task, low coupling between tasks?
 
-1. **ReviewMode enum** (`src/models/review_models.py:12-15`): Clean `(str, Enum)` pattern enables JSON serialization and string comparison. Placed at module top before other models — good organization.
+**PASS with NOTE.** Each phase is thematically cohesive:
 
-2. **ReviewJobConfig** (`src/review_job.py:88`): `review_mode` field added at the end of the dataclass with a sensible default (`ReviewMode.FULL`), preserving backward compatibility for all existing callers.
+- Phase 1: Prompt/parameter alignment only (no code logic changes)
+- Phase 2: Coverage system (classifier, schema, gate, scoring)
+- Phase 3: Scoring taxonomy and checklists
+- Phase 4: Noise reduction and audit
+- Phase 5: Language intelligence
+- Phase 6: Fix verification and parallelism
 
-3. **BatchReviewJob** (`src/batch_review_job.py:46`): `review_mode` parameter follows the same default pattern. The CHECK_NEW conditional (lines 88-93) is clear and correctly placed before `_fetch_previous_findings()`.
-
-4. **CLI** (`src/run_agent.py:31-43`): `add_mutually_exclusive_group()` is the correct argparse pattern. Flag-to-enum resolution (lines 46-52) is straightforward. The `review_mode` is correctly passed to the `BatchReviewJob` constructor.
-
-5. **Consistency**: Both `ReviewJobConfig` constructors in `BatchReviewJob` (single-session at line 105 and batched at line 237) correctly pass `review_mode=self.review_mode`.
+**NOTE:** Phase 6 bundles two fairly distinct concerns — deterministic fix verification (Task 28) and parallel batch execution (Task 29). These share no code, no data structures, and no abstractions. The justification for co-locating them is thin — "execution efficiency" is a stretch. However, splitting them into separate phases would add a 7th commit, and both are self-contained. The coupling cost is low enough that this is acceptable as-is.
 
 ---
 
-## Observations (non-blocking)
+## 3. Are key abstractions and shared interfaces in the earliest tasks?
 
-- The standalone `create_findings()` path in `ReviewJob` (lines 715-726) still fetches previous findings when `previous_findings is None`, regardless of `review_mode`. This is acceptable for Phase 1 since the CHECK_NEW guard is in `BatchReviewJob.run()` which is the primary entry point. Phase 2 (Task 3) will add the mode-conditional guard inside `ReviewJob.create_findings()` as specified in the plan.
+**PASS.** The plan correctly sequences foundational abstractions before their consumers:
+
+- `risk_classifier.py` (Task 7) created before injection into prompt (Task 8), coverage gate usage (Task 11), and audit trail inclusion (Task 20)
+- `files_clean` field (Task 10) created before coverage calculation (Task 11)
+- `languages.yml` registry (Task 22) created before stack detector (Task 23) and integration (Task 26)
+- Config fields (Task 11) created before Task 12 adjusts defaults
+
+---
+
+## 4. Is the riskiest assumption validated in Task 1?
+
+**PASS.** The spec's root cause analysis identifies conflicting tool-call budgets as the primary driver of ~30% false positives. Phase 1 addresses this directly: aligning the limit to 40 (Task 1), rewriting the turn efficiency guidance (Task 2), adding verify-before-CRITICAL (Task 3), and setting temperature/seed for consistency (Task 4). This is the right ordering — if the turn budget alignment doesn't reduce false positives, the later phases (coverage gate, risk classifier) would be optimizing the wrong thing.
+
+---
+
+## 5. Later tasks reuse early abstractions (DRY)?
+
+**PASS.** Clear reuse chains:
+
+- `risk_classifier.classify()` -> Task 8 (prompt injection) -> Task 20 (audit trail includes risk table)
+- `files_clean` field -> Task 11 (coverage calculation) -> Task 20 (audit trail files reviewed)
+- `config.py` fields -> Task 12 (batch_max_turns), and used by risk_classifier thresholds
+- `languages.yml` -> Task 23 (stack detector), Task 26 (file_filter.py registry lookup)
+
+No duplicated abstractions detected.
+
+---
+
+## 6. 2-3 work tasks per phase, then a VERIFY checkpoint?
+
+**PASS with NOTE.** Task counts per phase:
+
+| Phase | Work Tasks | Within Range? |
+|-------|-----------|---------------|
+| 1 | 5 | No — but each is a small, isolated edit (one grep, one constant, one step insertion) |
+| 2 | 6 | No — but this is the most complex system (classifier + schema + gate + scoring + alignment) |
+| 3 | 4 | No — but 2 are new checklist files (content, not logic) |
+| 4 | 2 | Yes |
+| 5 | 5 | No — 15 lang files drive the count; splitting would fragment the registry |
+| 6 | 2 | Yes |
+
+Every phase ends with a VERIFY checkpoint that specifies mocked unit tests and grep checks. The oversized phases are justified by spec complexity — Phase 1 tasks are each <10 lines of changes, Phase 5's bulk is content files not logic. Acceptable.
+
+---
+
+## 7. Each task completable in one session?
+
+**PASS with NOTE.** Most tasks are targeted single-file edits. Two tasks warrant attention:
+
+- **Task 24** (8 rules files, 30-50 items each): ~240-400 checklist items of content. Heavy but mechanical — each file follows the same template. One session is tight but feasible.
+- **Task 25** (7 rules files, 30-50 items each): Same pattern, slightly smaller. Feasible.
+- **Task 28** (fix verifier): Most complex new file. However, the algorithm is exhaustively specified with 5 steps, clear input/output, and explicit edge cases. A senior dev could implement this in one session.
+
+---
+
+## 8. Dependencies satisfied in order?
+
+**PASS.** All declared blockers are sequenced correctly:
+
+- Task 8 -> depends on Task 7 (risk classifier must exist before injection)
+- Task 11 -> depends on Task 10 (files_clean must exist before coverage calc)
+- Task 12 -> depends on Task 11 (config fields must exist)
+- Task 15 -> depends on Task 14 (testing category first, then expand)
+- Task 23 -> depends on Task 22 (registry before detector)
+- Task 26 -> depends on Tasks 22, 23, 24, 25 (all pieces before integration)
+
+Cross-phase dependencies are also handled by sequential phase order (e.g., Task 20's audit trail references Phase 2's risk table, and Phase 4 runs after Phase 2).
+
+---
+
+## 9. Any vague tasks that two developers would interpret differently?
+
+**FAIL — one issue found.**
+
+**Task 11 vs Task 12 — `batch_max_turns` contradiction.** Task 11 (Change 5) adds `batch_max_turns: int = Field(default=40, ...)` as a new config field. Task 12 (Change 1) says "change the default from `15` to `40`" and states "The existing code has `batch_max_turns: int = 15`."
+
+These contradict each other:
+- If the field already exists at 15 in the codebase, Task 11 should not list it as a new field — it should only add the other three fields (`coverage_gate_mode`, `risk_high_threshold`, `risk_medium_threshold`).
+- If the field does not exist, Task 11 creates it at 40 and Task 12 is a no-op.
+
+**Fix required:** Determine whether `batch_max_turns` already exists in `config.py`. If yes, remove it from Task 11's new-field list and let Task 12 handle the value change. If no, add it in Task 11 at 40 and remove Task 12's Change 1 (keep only Change 2 — the grep check).
+
+---
+
+## 10. Any hidden dependencies between tasks?
+
+**PASS with NOTE.**
+
+- **Task 9** says "Blockers: none" but references the "pre-computed risk table" which is injected by Task 8. However, Task 9 only adds prompt text that describes how to interpret the table — it doesn't depend on the table injection code. The instructions work even if the table doesn't exist yet (the agent just won't see a table). Not a true blocker. OK.
+
+- **Task 20** (audit trail, Phase 4) includes the risk classification table from Phase 2. Since Phase 4 executes after Phase 2, this dependency is satisfied by phase ordering. However, it's not declared as a blocker — it should at minimum note "Requires Phase 2 risk classifier to be complete."
+
+---
+
+## 11. Does the plan include a risk register? If missing or incomplete, identify the risks yourself.
+
+**PASS with NOTE.** The plan includes a 6-item risk register covering: seed non-determinism, heuristic weights, SequenceMatcher limitations, rate limits, monorepo deferral, and fix verifier LLM costs. Each has an impact assessment and mitigation.
+
+**Missing risks the register should include:**
+
+1. **Prompt token budget blow-up.** 15 lang-rules files at 30-50 items each could inject thousands of tokens when multiple languages are detected (e.g., a full-stack repo with C#, TypeScript, React, SQL). This could crowd out diff context in the prompt. **Mitigation:** Cap total injected rules tokens; only inject rules for languages with changed files in the PR.
+
+2. **Coverage gate blocking PRs on agent bugs.** The plan mandates 100% hard gate from day one with no gradual rollout. If the agent has an edge case (e.g., a file type it doesn't recognize, a diff fetch failure it doesn't recover from), the gate blocks the PR and the team has to manually switch to `"log"` mode. **Mitigation:** Run in `"log"` mode for the first 5-10 production PRs to validate, then switch to `"hard"`.
+
+3. **Temperature change regression.** Moving from the current default (likely 1.0 or unset) to 0.3 changes model behavior. While the spec cites pipeline 268 as precedent, the current codebase may produce different results at 0.3 due to prompt changes since that pipeline. **Mitigation:** Compare finding quality on 3-5 PRs before and after the temperature change.
+
+---
+
+## 12. Does the plan align with the spec's intent — solving the right problem?
+
+**PASS.** The spec identifies five measured problems (P1-P4, P7) and the plan addresses each:
+
+| Problem | Spec Target | Plan Solution |
+|---------|------------|---------------|
+| P1 — False positives (~30%) | <10% | Phase 1: turn limit alignment, verify-before-CRITICAL, temperature |
+| P2 — Test noise (~40% "add tests") | 0% gate impact | Phase 3: testing category with zero-weight scoring |
+| P3 — Run inconsistency | >80% Jaccard overlap | Phase 1: temperature=0.3, seed=42 |
+| P4 — Silent file skips (~60-70% coverage) | 100% coverage | Phase 2: risk classifier, coverage gate, files_clean |
+| P7 — Category imbalance (85% best_practices) | <50% best_practices | Phase 3: expanded categories (9 total) |
+
+The plan also includes spec-aligned additions beyond the core problems: language intelligence (15 languages), deterministic fix verification, parallel batch execution, and audit trail. All trace back to spec sections.
+
+---
+
+## Plan VERIFY Sections vs Spec VERIFY Sections
+
+**FAIL — Phase 1 VERIFY is incomplete.** The plan's Phase 1 VERIFY (section 1.6) checks only 4 items:
+
+1. pytest passes
+2. Grep for "ZERO or minimal" — gone
+3. Grep for "max 10" — gone
+4. temperature=0.3 in both API call sites
+
+The spec's Phase 1 VERIFY additionally checks:
+5. Step 5e (verify-before-CRITICAL) exists in `review-pr-core.md`
+6. Failed diffs surfacing logic exists in `review_job.py`
+
+Tasks 1.3 and 1.5 have no verification coverage in the plan's VERIFY step. Both tasks could be implemented, break, or be skipped without the VERIFY step catching it.
+
+**Fix required:** Add items 5 and 6 to the Phase 1 VERIFY section.
+
+---
+
+## Constraints Verification
+
+| Constraint | Status |
+|-----------|--------|
+| Branch: `feat/review-quality` from `origin/main` | **PASS** — stated in plan header and constraints table |
+| 1 commit per phase (not per task) | **PASS** — commit strategy table lists exactly 6 commits for 6 phases |
+| MOCKED UNIT TESTS ONLY in VERIFY steps | **PASS** — every VERIFY step begins with "MOCKED UNIT TESTS ONLY" |
+| NEVER push to main, master, or development | **PASS** — constraints table explicitly states this |
+| Commit messages match the spec | **PASS** — plan and spec commit messages are identical |
 
 ---
 
 ## Summary
 
-Phase 1 is correctly implemented. The `ReviewMode` enum is well-structured, properly threaded through config and CLI, flags are mutually exclusive, and CHECK_NEW mode correctly skips previous findings fetch in the batch orchestrator. All 190 existing tests pass with no regressions. Ready to proceed to Phase 2.
+**Verdict: CHANGES NEEDED** — two issues require fixes before implementation begins.
 
----
+### Must fix (blocking):
 
-# Review Modes — Phase 2 Code Review
+1. **Task 11 / Task 12 `batch_max_turns` contradiction.** Determine whether the field exists in the current codebase. If yes, remove from Task 11's new-field list. If no, remove Task 12's Change 1. Two developers reading this plan today would make different assumptions about which task owns this field.
 
-**Reviewer:** local-codehawk-reviewer
-**Date:** 2026-05-08
-**Verdict:** APPROVED
+2. **Phase 1 VERIFY missing two checks.** Add verification of Step 5e (verify-before-CRITICAL) and failed diffs surfacing to the Phase 1 VERIFY section. Without these, two of five Phase 1 tasks have no verification coverage.
 
-> Phase 2: Conditional Behavior — Prompt, Write Guards, Post-Findings
+### Should fix (non-blocking):
 
----
+3. **Risk register gaps.** Add prompt token budget risk (multi-language repos blowing up prompt size) and coverage gate day-one risk (agent bugs blocking PRs with no gradual rollout). These are the two most likely production incidents from this sprint.
 
-## Checklist
+4. **Task 20 undeclared dependency.** Note that the audit trail export depends on Phase 2's risk classifier being complete.
 
-| Item | Status | Notes |
-|------|--------|-------|
-| create_findings() skips prior-findings fetch for CHECK_NEW | PASS | `review_job.py:89` — condition `self.config.review_mode != ReviewMode.CHECK_NEW` guards the standalone fetch path |
-| _build_prompt() injects VERIFY_FIXES instructions | PASS | `review_job.py:450-451` — appends `_build_verify_only_instructions()` containing "VERIFY-ONLY MODE" |
-| _build_prompt() injects CHECK_NEW instructions | PASS | `review_job.py:452-453` — appends `_build_check_new_instructions()` containing "FRESH REVIEW MODE" |
-| _build_verify_only_instructions() clear and forceful | PASS | Lines 368-378 — explicit constraints: findings[] MUST be empty, populate fix_verifications[], skip Steps 3-5 |
-| _build_check_new_instructions() clear and forceful | PASS | Lines 380-389 — explicit constraints: fix_verifications[] MUST be empty, skip Step 6, no prior findings |
-| _write_findings() strips findings[] for VERIFY_FIXES | PASS | `review_job.py:541-544` — forces `data["findings"] = []` and appends `"verify_fixes"` to review_modes |
-| _write_findings() strips fix_verifications[] for CHECK_NEW | PASS | `review_job.py:545-548` — forces `data["fix_verifications"] = []` and appends `"check_new"` to review_modes |
-| post_findings detects verify-only mode | PASS | `post_findings.py:816` — `is_verify_only = "verify_fixes" in review_modes and not findings_file.findings` |
-| Verify-only skips inline comments | PASS | `post_findings.py:876` — entire inline posting loop guarded by `if not is_verify_only` |
-| Verify-only still processes fix verifications | PASS | `post_findings.py:888-893` — fix verification handling is unconditional, not gated by is_verify_only |
-| Summary title "Fix Verification Only" for verify-only | PASS | `post_findings.py:557-558` — title set to "AI Code Review — Fix Verification Only" |
-| Gate passes for verify-only (no new findings) | PASS | `post_findings.py:897-898` — hard-coded `{"passed": True, "reasons": []}` |
-| FULL mode behavior completely unchanged | PASS | All mode-conditional code uses explicit VERIFY_FIXES/CHECK_NEW checks; FULL falls through to existing paths |
-| Confidence filtering skipped for verify-only | PASS | `post_findings.py:819-821` — short-circuits to empty list |
-| Capping skipped for verify-only | PASS | `post_findings.py:851` — ternary sets capped to `[]` |
-| CR-ID dedup fetch skipped for verify-only | PASS | `post_findings.py:858` — `is_verify_only or dry_run` produces empty set |
-| Findings section suppressed in summary for verify-only | PASS | `post_findings.py:716` — `if filtered_findings and not is_verify_only` |
-| Phase 1 not regressed | PASS | Phase 1 files (review_models.py, run_agent.py, batch_review_job.py) untouched in Phase 2 commits |
-| All existing tests pass | PASS | 190 passed, 13 skipped (identical to baseline) |
+### Passed without issues:
 
----
-
-## Code Quality Notes
-
-1. **create_findings() guard** (`review_job.py:89`): Clean single-line condition addition. The `CHECK_NEW` guard at both the `BatchReviewJob` level (Phase 1) and the standalone `ReviewJob` level (Phase 2) provides complete coverage — addresses the Phase 1 observation.
-
-2. **Prompt injection** (`review_job.py:450-453`): Mode instructions are appended after `previous_findings` section and before config section, which is the correct position — the agent sees mode constraints immediately after the prior findings table. Both instruction methods use bold headers and imperative language.
-
-3. **Defense-in-depth** (`review_job.py:539-548`): `setdefault` for review_modes is defensive against missing keys. Strips the correct field for each mode and ensures the mode tag is present in review_modes for downstream consumers (post_findings).
-
-4. **post_findings verify-only detection** (`post_findings.py:816`): Uses `not findings_file.findings` rather than checking review_modes alone — this means a VERIFY_FIXES run where the agent somehow produced findings (before write guards strip them) would still be detected correctly by the double condition. Good defensive design.
-
-5. **Gate bypass** (`post_findings.py:897-898`): Hard-coded pass is correct — verify-only runs have no findings to gate on. The gate still loads .codereview.yml (line 896) which is slightly wasteful but harmless.
-
----
-
-## Observations (non-blocking)
-
-1. **Duplicate step number comment** (`post_findings.py:895,902`): Steps 11 and 12 in the `run()` function both start at `# 11.` after the Phase 2 renumbering. The second `# 11` (line 902) should be `# 12`. Cosmetic only — no logic impact.
-
-2. **Scoring still runs for verify-only** (`post_findings.py:870-871`): `apply_mode_multipliers` and `calculate_pr_score` run on the empty `capped` list, producing a perfect 5-star score. This is correct behavior (no penalty deductions = best score), but the score is somewhat meaningless for verify-only runs. The summary title already disambiguates this for users.
-
----
-
-## Summary
-
-Phase 2 is correctly implemented. All three components — prompt injection, write guards, and post_findings mode awareness — work together as a defense-in-depth chain: the prompt tells the agent what to do, write guards enforce it regardless of agent compliance, and post_findings adapts its behavior to the resulting mode-tagged findings file. FULL mode code paths are untouched. All 190 existing tests pass with no regressions. Ready to proceed to Phase 3 (tests).
-
----
-
-# Review Modes — Phase 3 (Cumulative) Code Review
-
-**Reviewer:** local-codehawk-reviewer
-**Date:** 2026-05-08
-**Verdict:** APPROVED
-
-> Cumulative review covering all three phases: Foundation, Conditional Behavior, and Tests.
-
----
-
-## Phase 3 Checklist — Tests
-
-| Item | Status | Notes |
-|------|--------|-------|
-| test_review_modes.py exists | PASS | `tests/unit/test_review_modes.py` — 483 lines, 6 test classes |
-| At least 15 test cases | PASS | **31 tests** across 6 groups (enum: 7, CLI: 4, batch: 4, prompt: 5, write guards: 6, post_findings: 5) |
-| Enum tests: values, string comparison, all three modes | PASS | `TestReviewModeEnum` — 7 tests: value checks, string comparison, str subclass, default config |
-| CLI tests: --verify-fixes, --check-new-findings, both rejected, default | PASS | `TestCLIParsing` — 4 tests using `_parse()` helper that patches `BatchReviewJob` and captures `review_mode` kwarg |
-| BatchReviewJob tests: CHECK_NEW skips fetch, FULL/VERIFY call it, mode threaded | PASS | `TestBatchReviewJobModeBehavior` — 4 tests including config propagation verification |
-| Prompt injection tests: VERIFY_FIXES/CHECK_NEW/FULL content | PASS | `TestPromptInjection` — 5 tests: mode headers, key constraints (MUST be empty, skip steps) |
-| Write guard tests: strip findings, strip fix_verifications, preserve both | PASS | `TestWriteGuards` — 6 tests: strips, stamps, preserves, dedup of mode stamp |
-| post_findings tests: gate passes, inline skipped, title change | PASS | `TestPostFindingsVerifyOnly` — 5 tests: gate, inline comments, title, normal title negative, edge case |
-| No test overlap/redundancy | PASS | Each test targets a distinct behavior; no duplicated assertions |
-| Meaningful assertions | PASS | Tests assert on actual output values (JSON content, enum equality, mock call counts) — not just "no exception" |
-| All 221 tests pass | PASS | `221 passed, 13 skipped in 2.25s` |
-
----
-
-## Cumulative Checklist — All Phases
-
-| Requirement | Status | Evidence |
-|-------------|--------|----------|
-| ReviewMode enum correct (FULL, VERIFY_FIXES, CHECK_NEW) | PASS | `review_models.py:12-16` — `ReviewMode(str, Enum)` with values `"full"`, `"verify_fixes"`, `"check_new"` |
-| CLI flags mutually exclusive | PASS | `run_agent.py:30` — `add_mutually_exclusive_group()` |
-| review_mode threaded BatchReviewJob → ReviewJobConfig → ReviewJob | PASS | `batch_review_job.py:40,49` → `review_job.py:62` → both single-session (line 111) and batched (line 246) paths |
-| CHECK_NEW skips _fetch_previous_findings() | PASS | `batch_review_job.py:82-84` and `review_job.py:89` |
-| Prompt injection correct for VERIFY_FIXES | PASS | `review_job.py:450-451` → `_build_verify_only_instructions()` lines 368-378 |
-| Prompt injection correct for CHECK_NEW | PASS | `review_job.py:452-453` → `_build_check_new_instructions()` lines 380-389 |
-| Write guards strip correct fields per mode | PASS | `review_job.py:541-548` — VERIFY_FIXES: `findings=[]`, CHECK_NEW: `fix_verifications=[]` |
-| post_findings verify-only: skip inline, process fix_verifications | PASS | `post_findings.py:876` (inline skip), `post_findings.py:888-893` (fix verifications unconditional) |
-| post_findings verify-only: title change | PASS | `post_findings.py:557-558` — "AI Code Review — Fix Verification Only" |
-| post_findings verify-only: gate passes | PASS | `post_findings.py:897-898` — hard-coded `{"passed": True}` |
-| Default FULL mode completely unchanged | PASS | All mode-conditional code uses explicit VERIFY_FIXES/CHECK_NEW checks; FULL falls through to existing paths |
-| Test coverage ≥15 tests | PASS | 31 tests covering all 6 required groups |
-| Code consistent with existing patterns | PASS | Uses same dataclass/enum/argparse/mock patterns as existing codebase |
-| No security issues | PASS | No user input flows to shell commands, no injection vectors, mode enum is closed |
-| All acceptance criteria from requirements.md met | PASS | See acceptance criteria section below |
-
----
-
-## Acceptance Criteria Verification
-
-| Criterion | Met? | Notes |
-|-----------|------|-------|
-| `python run_agent.py --help` shows both new flags | YES | `--verify-fixes` and `--check-new-findings` with help text (lines 32-42) |
-| Both flags mutually exclusive (argparse error) | YES | `add_mutually_exclusive_group()` on line 30; tested in `test_both_flags_rejected` |
-| `--verify-fixes` produces empty findings[], populated fix_verifications[] | YES | Write guard forces `data["findings"] = []` (line 542); prompt instructs agent to populate fix_verifications |
-| `--check-new-findings` produces empty fix_verifications[], populated findings[] | YES | Write guard forces `data["fix_verifications"] = []` (line 546); prompt instructs fresh review |
-| Default mode identical to current | YES | No mode-conditional code fires for FULL; all 190 original tests pass unchanged |
-| Summary title changes for verify-only | YES | "AI Code Review — Fix Verification Only" in `_build_summary_markdown` (line 558) |
-| All 190 existing tests pass | YES | 221 total (190 original + 31 new), 13 skipped |
-| New tests cover: enum, CLI, conditional fetch, prompt, write guards, post_findings | YES | 6 test classes, 31 tests, all passing |
-
----
-
-## Test Quality Assessment
-
-**Strengths:**
-1. **Helper functions** (`_make_config`, `_make_findings_data`, `_make_finding_dict`) reduce duplication without over-abstracting
-2. **CLI tests** use realistic argv with full required flags, patching `BatchReviewJob` to capture the `review_mode` kwarg — tests the actual argparse wiring, not a simplified version
-3. **BatchReviewJob tests** mock at the right level (`_fetch_pr_details`, `_fetch_previous_findings`, `_build_graph`, `filter_changed_files`) — tests conditional logic without requiring real PR data
-4. **Write guard tests** verify both stripping (the safety mechanism) and stamping (the mode tag) — covers the full defense-in-depth contract
-5. **post_findings tests** test the `_build_summary_markdown` function directly for title verification, and use `pf.run()` with `dry_run=True` for integration-level gate and inline comment checks
-6. **Edge case** `test_verify_only_with_findings_present_is_not_detected_as_verify_only` — verifies the dual condition in `is_verify_only` detection (needs both `verify_fixes` in review_modes AND empty findings)
-7. **Dedup test** `test_verify_fixes_does_not_duplicate_mode_stamp` — ensures idempotent mode stamping
-
-**No issues found.** Tests are well-organized, non-redundant, and exercise the actual code paths rather than just testing helpers.
-
----
-
-## Observations (non-blocking, carried forward)
-
-1. **Duplicate step numbering** (Phase 2 observation): `post_findings.py:895,902` both say `# 11.` — cosmetic only, no logic impact.
-
-2. **Scoring runs on empty list for verify-only** (Phase 2 observation): produces a perfect 5-star score which is meaningless but harmless; the summary title disambiguates.
-
----
-
-## Summary
-
-The Review Modes feature is complete and correct across all three phases. The implementation follows a clean defense-in-depth pattern: CLI flags → enum threading → prompt injection → write guards → post_findings mode detection. Each layer operates independently, so even if the AI agent ignores prompt instructions, the write guards enforce the contract. All 221 tests pass (31 new + 190 original), coverage exceeds requirements (31 tests vs. 15 minimum), and all 8 acceptance criteria from requirements.md are satisfied. No regressions, no security issues, no blocking findings. **APPROVED for merge.**
+- All tasks have clear done criteria
+- Cohesion within phases is strong
+- Key abstractions sequenced before consumers
+- Riskiest assumption (turn budget) validated first
+- Later tasks reuse early abstractions (DRY)
+- Dependencies satisfied in declared order
+- Each task is one-session scoped
+- Plan aligns with spec intent across all 5 measured problems
+- All explicit constraints (branch, commits, test type, protected branches, commit messages) satisfied
