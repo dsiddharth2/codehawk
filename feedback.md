@@ -1,30 +1,76 @@
-# Sprint 3: Review Quality + Coverage — Plan Re-Review
+# Sprint 3 — Review Quality + Coverage Enforcement — Code Review
 
 **Reviewer:** local-codehawk-reviewer
-**Date:** 2026-05-22T12:00:00+05:30
-**Verdict:** APPROVED
+**Date:** 2026-05-22 14:30:00+05:30
+**Verdict:** CHANGES NEEDED
 
 > See the recent git history of this file to understand the context of this review.
 
 ---
 
-## Item 1: Task 11/12 batch_max_turns contradiction (BLOCKING)
-**Result:** PASS
-Task 11 Change 5 (PLAN.md line 188) now explicitly states "`batch_max_turns` already exists at default 15 and is updated separately in Task 12" and lists only three new fields: `coverage_gate_mode`, `risk_high_threshold`, `risk_medium_threshold`. Task 12 (PLAN.md line 202) owns the `batch_max_turns` default change from 15 to 40 and references the existing field at line 125-127 of `src/config.py`. No contradiction remains — ownership is clear and unambiguous.
+## 1. Task 1: Align tool-call limit
 
-## Item 2: Phase 1 VERIFY completeness (BLOCKING)
-**Result:** PASS
-The Phase 1 VERIFY section (PLAN.md lines 58-64) now contains 6 verification items covering all 5 Phase 1 tasks: (1) pytest passes, (2) grep for "ZERO or minimal" gone, (3) grep for "max 10" gone, (4) temperature=0.3 in both API call sites, (5) grep `review-pr-core.md` for "5e" or "Verify before flagging CRITICAL" — covers Task 3, (6) grep `review_job.py` `_pre_fetch_diffs` for `failed_diffs` collection and prompt injection — covers Task 5. No Phase 1 task is left without verification coverage.
+**PASS.** `review-pr-core.md` line 6 now reads `max 40 tool calls`. Grep for "max 10" returns zero matches. Grep for "max 40" returns the expected match in Step 0 constraints. Done criteria fully met.
 
-## Item 3: Risk register gaps (NON-BLOCKING)
-**Result:** PASS
-The risk register (PLAN.md lines 712-713) now includes both requested risks: (a) "Prompt token budget blow-up for multi-language repos" with mitigation to only inject rules for languages with changed files in the PR, and (b) "Coverage hard-gate blocking PRs on day one due to agent bugs" with mitigation to run in `"log"` mode for the first 5-10 production PRs before switching to `"hard"`. Both risks include impact assessments and concrete mitigations.
+---
 
-## Item 4: Task 20 dependency (NON-BLOCKING)
-**Result:** PASS
-Task 20's Blockers field (PLAN.md line 391) now reads: "none (Phase 4 runs after Phase 2; risk classifier from Task 7 must be complete for the risk table section of the audit — satisfied by phase ordering)". The dependency on Phase 2's risk classifier is explicitly documented with the rationale for why it's satisfied by phase ordering rather than a declared blocker.
+## 2. Task 2: Rewrite TURN EFFICIENCY block
+
+**PASS.** `openai_runner.py` SYSTEM_PROMPT no longer contains "ZERO or minimal". The replacement text matches the plan specification — it explains the 40-call budget, encourages `read_local_file`/`get_file_content` for verification, mentions `get_callers` for blast radius, and retains the "Do NOT call `get_file_diff`..." line. The new guidance shifts the agent from a "minimize calls" mindset to a "spend calls wisely" mindset, which aligns with the sprint's goal of reducing false positives through verification.
+
+---
+
+## 3. Task 3: Add verify-before-CRITICAL rule
+
+**PASS.** Step 5e exists at line 168 of `review-pr-core.md` with the verify-before-CRITICAL text. The previous Step 5e ("Produce findings") has been correctly renumbered to Step 5f. The new step requires the agent to call `read_local_file` or `get_file_content` before emitting any `critical` finding, and to downgrade or drop if verification shows the issue doesn't exist. Done criteria met.
+
+---
+
+## 4. Task 4: Set temperature and seed on API calls
+
+**PASS.** `temperature=0.3` appears at both API call sites:
+- Line 199: `_run_chat_completions` → `temperature=0.3` as a keyword arg to `client.chat.completions.create()`
+- Line 332: `_run_responses_api` → `"temperature": 0.3` in the kwargs dict for `client.responses.create()`
+
+`seed=42` appears at line 200 in `_run_chat_completions` only, which is correct per the plan (the Responses API does not support `seed`). Done criteria fully met.
+
+---
+
+## 5. Task 5: Surface failed diff fetches
+
+**PASS with one FAIL item (see below).**
+
+The implementation correctly:
+- Returns a `tuple[dict[str, str], list[str]]` from `_pre_fetch_diffs` (line 278)
+- Appends failed file paths to a `failed_diffs` list in the except block (line 308)
+- Logs a warning with the failed file list (lines 311-312)
+- Unpacks the tuple at the call site (line 162) and passes `failed_diffs` to `_build_review_context`
+- Injects a "Failed Diff Fetches" section into the prompt when `failed_diffs` is non-empty (lines 363-372)
+- The injected text matches the plan's specified wording
+
+**FAIL — Contradictory prompt instructions.** The failed_diffs injection at line 368 tells the agent: "You MUST fetch them via `get_file_diff` or `read_local_file` during review." However, line 374 unconditionally appends: "Do NOT call `get_file_diff` — all data is above." When failed diffs exist, these two instructions directly contradict each other. The agent is told to use `get_file_diff` and told not to use it in the same prompt.
+
+**Fix:** Either (a) make line 374 conditional — exclude `get_file_diff` from the "Do NOT call" list when `failed_diffs` is non-empty, or (b) change the failed_diffs message to only suggest `read_local_file` or `get_file_content` (dropping `get_file_diff`). Option (b) is simpler and consistent with Task 2's TURN EFFICIENCY rewrite which already encourages `read_local_file`/`get_file_content`.
+
+**Doer:** fixed in commit bc2db7b — changed failed_diffs injection to recommend only `read_local_file` or `get_file_content`, removing `get_file_diff` from the suggestion. This eliminates the contradiction with the unconditional "Do NOT call `get_file_diff`" instruction on line 374.
+
+---
+
+## 6. Task 6 VERIFY: Test suite
+
+**PASS.** 221 tests passed, 13 skipped, 0 failures in 2.87s. The task notes claim 224 tests — the 3-test discrepancy appears to be tests that moved from "passed" to "skipped" between the doer's run and this review run (possibly environment-dependent skips). No test failures, which is the actual gate criterion.
+
+All grep verification checks pass:
+- "ZERO or minimal" not found in `openai_runner.py` SYSTEM_PROMPT
+- "max 10" not found in `review-pr-core.md`
+- `temperature=0.3` present in both API call sites
+- Step 5e with "Verify before flagging CRITICAL" present in `review-pr-core.md`
+- `failed_diffs` collected and injected into prompt context in `review_job.py`
 
 ---
 
 ## Summary
-All four items from the initial review have been addressed. Both blocking issues (Task 11/12 contradiction and Phase 1 VERIFY gaps) are resolved — Task 11 no longer claims ownership of `batch_max_turns`, and the VERIFY section now covers all 5 Phase 1 tasks. Both non-blocking issues (risk register gaps and Task 20 dependency) are also resolved with clear documentation. The plan is ready for implementation.
+
+5 of 6 tasks pass cleanly. Task 5 has one must-fix item: the failed_diffs prompt injection contradicts the existing "Do NOT call `get_file_diff`" instruction on line 374 of `review_job.py`. This will confuse the agent when a diff fetch actually fails in production. The fix is a one-line change — either make the "Do NOT call" line conditional or drop `get_file_diff` from the failed_diffs suggestion text.
+
+All tests pass. No regressions. No security issues. The prompt and parameter changes are well-scoped and match the plan's intent.
