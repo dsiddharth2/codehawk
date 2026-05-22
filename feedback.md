@@ -1,138 +1,136 @@
 # Sprint 3 — Review Quality + Coverage Enforcement — Code Review
 
 **Reviewer:** local-codehawk-reviewer
-**Date:** 2026-05-23 00:45:00+05:30
+**Date:** 2026-05-22 22:30:00+05:30
 **Verdict:** APPROVED
 
 > See the recent git history of this file to understand the context of this review.
 
 ---
 
-## Phase 1–3 Regression Check
+## Phases 1–4 Regression Check
 
-**PASS.** Phases 1 (approved in 63ebc04), 2 (approved in 5940338), and 3 (approved in dd0d6f0) re-verified against the Phase 4 commit (af5caed). No regressions found:
+**PASS.** All previously approved phases (1 through 4) re-verified against Phase 5 commits (2a41216, a2ba02b). No regressions found:
 
-- `temperature=0.3` in `_run_chat_completions` (openai_runner.py:199), `seed=42` (openai_runner.py:200) — unchanged.
-- "max 40 tool calls" in `review-pr-core.md` Step 0 — unchanged.
-- Step 5e verify-before-CRITICAL — present.
-- `failed_diffs` injection in `review_job.py` — correct wording, no contradictions.
+- `temperature=0.3` and `seed=42` in `openai_runner.py` — unchanged.
+- "max 40 tool calls" in `review-pr-core.md` Step 0 — present, "max 10" absent.
+- "ZERO or minimal" in `SYSTEM_PROMPT` — absent (correctly removed in Phase 1).
+- Step 5e verify-before-CRITICAL — present in `review-pr-core.md`.
+- `failed_diffs` injection in `review_job.py` — unchanged from Phase 1 approval.
 - `risk_classifier.py` — unchanged from Phase 2 approval.
-- `files_clean` in `findings-schema.json` — present.
-- Coverage gate hard/log modes — unchanged.
-- `batch_max_turns` default 40 (`config.py:126`) — unchanged.
-- `VALID_CATEGORIES` — all 9 categories present (`post_findings.py:130-133`).
-- `CATEGORY_REMAP` — only 4 entries (`post_findings.py:134-138`).
-- Architecture and performance checklist files — present and referenced from `review-pr-core.md`.
-- All 249 Phase 1-3 unit tests pass.
+- `files_clean` in `review_models.py` and `findings-schema.json` — present.
+- Coverage gate hard/log modes in `post_findings.py` — unchanged.
+- `batch_max_turns` default 40 in `config.py` — unchanged.
+- 9 valid categories, 4 remap entries in `post_findings.py` — unchanged.
+- Architecture and performance checklist files — present.
+- `merge_similar_findings()` and `_write_audit_trail()` in `post_findings.py` — unchanged.
+- All 270 pre-Phase-5 tests pass (302 total, 32 new Phase 5 tests).
 
 ---
 
-## Task 19: Comment merging
+## Task 22: Language Registry
 
-**PASS.** `merge_similar_findings()` added at `post_findings.py:271-330`.
+**PASS.** `commands/languages.yml` created with exactly 15 language entries: csharp, javascript, typescript, react, python, java, kotlin, go, rust, cpp, swift, android, ruby, php, sql.
 
-1. **Merge criteria implementation.** Groups by `f.file`, sorts by line, checks `abs(fj.line - anchor_line) > 5` for proximity, `difflib.SequenceMatcher.ratio() > 0.7` for similarity. All three criteria are AND-gated. **PASS.**
-
-2. **Severity prioritization.** `severity_order` dict ranks `critical=0, warning=1, suggestion=2`. When merging, the finding with the lower rank (higher severity) becomes the keeper. If `fj` has higher severity than `current`, the code swaps to keep `fj` and footnotes `current`. **PASS.**
-
-3. **Footnote format.** Merged findings append `"\n\n*(Also flagged at line {n}: {merged_title})*"` — matches plan specification. **PASS.**
-
-4. **Cross-file non-merge.** Findings are grouped by `f.file` into separate buckets — findings on different files never encounter each other in the merge loop. **PASS.**
-
-5. **Pipeline placement.** Merge runs at step 3b (`post_findings.py:1061-1063`), after `filter_by_confidence` and before `cap_findings`. This is the correct position per the plan: "between the existing `filter_by_confidence` step and `cap_findings` step". Skipped for verify-only mode. **PASS.**
-
-6. **Edge case: sorted-by-line early exit.** The `break` at line 311 (`if abs(fj.line - anchor_line) > 5: break`) is correct because findings are sorted by line — once we exceed the 5-line window, no further candidates can match. **PASS.**
-
-7. **No new dependencies.** Uses `difflib.SequenceMatcher` (stdlib) — no new packages. **PASS.**
-
-**Test coverage (10 tests):**
-- `test_nearby_similar_findings_on_same_file_merge` — lines 10, 12, 50 → two merge, one stays. **PASS.**
-- `test_different_files_do_not_merge` — cross-file identical findings stay separate. **PASS.**
-- `test_keeps_higher_severity_finding` — suggestion + critical → critical survives. **PASS.**
-- `test_footnote_added_to_merged_finding` — "Also flagged at line" present. **PASS.**
-- `test_line_gap_exactly_5_merges` — boundary test at 5. **PASS.**
-- `test_line_gap_of_6_does_not_merge` — boundary test at 6. **PASS.**
-- `test_dissimilar_findings_on_same_file_nearby_lines_do_not_merge` — different titles/messages. **PASS.**
-- `test_empty_input_returns_empty` — edge case. **PASS.**
-- `test_single_finding_returned_unchanged` — edge case. **PASS.**
-- `test_third_finding_far_away_not_merged` — mixed near+far. **PASS.**
-
-Done criteria: "Given 3 findings on same file with lines 10, 12, 50 — the first two merge, the third stays separate. Given 2 findings on different files with same title — they do NOT merge." — **both verified by tests and code inspection.**
+1. **Schema completeness.** Every entry has `extensions`, `config_files`, and `rules_file` fields. **PASS.**
+2. **Extension mapping matches plan.** C# → `.cs`, JS → `.js/.jsx/.mjs`, TS → `.ts/.tsx`, Go → `.go`, Rust → `.rs`, C++ → `.cpp/.cc/.cxx/.c/.h/.hpp/.hxx`, etc. **PASS.**
+3. **Overlay languages.** React and Android have `extensions: []` — detected via config files only, consistent with plan specification for overlay languages. **PASS.**
+4. **Rules file paths.** All `rules_file` values point to `commands/lang-rules/<lang>.md` matching the actual file locations. **PASS.**
 
 ---
 
-## Task 20: Audit trail export
+## Task 23: Stack Detector
 
-**PASS.** `_write_audit_trail()` added at `post_findings.py:878-1016`.
+**PASS.** `src/stack_detector.py` created with `StackProfile` dataclass and `detect()` function.
 
-1. **File path and timestamp.** `Path(workspace) / ".cr" / f"review_{pr_id}_{now:%Y%m%d_%H%M%S}.md"` — matches plan specification exactly. `cr_dir.mkdir(parents=True, exist_ok=True)` creates the directory if needed. **PASS.**
-
-2. **All 7 required sections present:**
-
-   | Section | Lines | Content | Verdict |
-   |---------|-------|---------|---------|
-   | PR Metadata | 892-908 | PR ID, repo, VCS, review modes, optional branch/author/title from `pr_details` | **PASS** |
-   | Score Breakdown | 910-928 | Overall rating, total penalty, per-category penalty table | **PASS** |
-   | Files Reviewed | 930-941 | Coverage display, coverage %, list of unreviewed files | **PASS** |
-   | Findings | 943-962 | Raw vs capped counts, severity/category/file/line/title/confidence table, filtered-out section | **PASS** |
-   | Token Usage | 964-979 | Model, input/output/total tokens, duration, estimated cost | **PASS** |
-   | Risk Classification | 981-986 | Injects `risk_table_md` parameter or "not available" fallback | **PASS** |
-   | Gate Decision | 988-995 | PASSED/FAILED result, reasons list | **PASS** |
-
-3. **Pipeline placement.** Audit trail is written at step 13b (`post_findings.py:1238-1252`), after summary posting and before output construction. This is the correct position per the plan: "after the summary posting step, before the output construction." **PASS.**
-
-4. **Error handling.** Write failure is caught with a generic `except Exception` and logged via `_eprint` — returns `None` instead of crashing the pipeline. **PASS.**
-
-5. **`risk_table_md` not wired in the `run()` call.** The `_write_audit_trail` call at line 1239 does not pass `risk_table_md`, so it defaults to `""` and the audit file says "*(Risk classification not available for this review)*". The risk table is computed in `review_job.py` (Phase 2) but not propagated to `post_findings.py`. **NOTE — not blocking.** The function signature accepts it and the section renders correctly in both cases. Wiring it through requires threading the risk table from `review_job.py` through the findings pipeline, which is integration work beyond Phase 4 scope. The audit file still contains all 7 section headers.
-
-**Test coverage (11 tests):**
-- `test_audit_file_is_created_in_cr_directory` — `.cr/` directory creation. **PASS.**
-- `test_audit_file_timestamp_format` — regex `review_42_\d{8}_\d{6}\.md`. **PASS.**
-- `test_audit_file_contains_pr_metadata_section` — PR ID, repo name. **PASS.**
-- `test_audit_file_contains_score_breakdown_section` — score, penalty. **PASS.**
-- `test_audit_file_contains_files_reviewed_section` — coverage %. **PASS.**
-- `test_audit_file_contains_findings_section` — severity, category. **PASS.**
-- `test_audit_file_contains_token_usage_section` — token counts, model. **PASS.**
-- `test_audit_file_contains_risk_classification_section` — section header. **PASS.**
-- `test_audit_file_contains_gate_decision_section` — FAILED, reasons. **PASS.**
-- `test_audit_written_during_dry_run` — end-to-end via `pf.run()` in dry-run. **PASS.**
-- `test_audit_file_contains_all_required_sections` — all 7 sections present. **PASS.**
-
-Done criteria: "Audit file written to `.cr/` with correct timestamp format; contains all expected sections (PR metadata, score breakdown, files reviewed, findings, token usage, risk table, gate decision)." — **all met.**
+1. **StackProfile dataclass.** Fields `languages: list[str]`, `frameworks: dict[str, dict[str, str]]`, `detected_from: list[str]` — matches plan specification exactly. **PASS.**
+2. **Config file parsers.** 11 language detectors implemented: `_detect_csharp` (XML `.csproj` parsing for `TargetFramework` + `PackageReference`), `_detect_node` (JSON `package.json` for React/Angular/Vue/TS/Next + `tsconfig.json`), `_detect_python` (requirements.txt, pyproject.toml, Pipfile), `_detect_java` (pom.xml with Maven namespace handling, build.gradle/kts), `_detect_go`, `_detect_rust`, `_detect_cpp`, `_detect_swift`, `_detect_android`, `_detect_ruby`, `_detect_php`. **PASS.**
+3. **C# .NET 8.0 test.** Unit test `test_detect_csharp_net8` confirms: `.csproj` with `<TargetFramework>net8.0</TargetFramework>` → `languages=["csharp"]`, `frameworks={"csharp": {"dotnet": "8.0"}}`. Matches the "Done when" criterion exactly. **PASS.**
+4. **Monorepo limitation.** Code comment at module docstring: "Monorepo limitation: only root-level configs are parsed (per-directory profiles deferred to a future sprint)." **PASS.**
+5. **Error handling.** Every parser wraps in try/except, logs to debug, and continues gracefully. No parser failure crashes the detection pipeline. **PASS.**
+6. **XML namespace handling in pom.xml.** Tries both with and without Maven 4.0 namespace for `maven.compiler.source` and `java.version`. **PASS.**
+7. **tsconfig.json comment stripping.** Handles JSON-with-comments by stripping `//` and `/* */` before parsing. **PASS.**
 
 ---
 
-## Task 21 VERIFY: Test Suite
+## Task 24: Version-aware Rules Files (Batch 1)
 
-**PASS.** `python -m pytest tests/ -v` — **270 passed, 13 skipped, 0 failures** in 2.61s. The 13 skipped are integration tests (expected — mocked unit tests only constraint).
+**PASS.** All 8 files created in `commands/lang-rules/`:
 
-- 21 new Phase 4 tests in `tests/unit/test_phase4_noise_audit.py` (10 merge + 11 audit).
-- All 249 Phase 1-3 tests continue to pass — no regressions.
-- Doer's progress.json reports 270 — matches actual count. **PASS.**
+| File | Checklist Items | Version Sections |
+|------|----------------|-----------------|
+| csharp.md | 40 | All Versions, .NET 6+, .NET 8+, EF Core 6+, ASP.NET Core |
+| javascript.md | 30 | Verified present |
+| typescript.md | 30 | Verified present |
+| react.md | 30 | Verified present |
+| python.md | 30 | All Versions, Python 3.8+, Python 3.10+, Python 3.12+ |
+| java.md | 30 | Verified present |
+| kotlin.md | 30 | Verified present |
+| go.md | 30 | Verified present |
+
+1. **Minimum item count.** All files have >= 30 checklist items. csharp.md leads with 40. **PASS.**
+2. **Version sections.** Spot-checked csharp.md and python.md in detail. csharp.md has 5 version sections matching plan (All Versions, .NET 6+, .NET 8+, EF Core 6+, ASP.NET Core). python.md has 4 version sections (All Versions, Python 3.8+, Python 3.10+, Python 3.12+). **PASS.**
+3. **Content quality.** Rules focus on real bugs and security issues, not formatting preferences. Examples: C# covers `async void` antipattern, SQL injection in EF Core raw SQL, CORS wildcard, anti-forgery tokens. Python covers mutable defaults, command injection, bare except, SQL injection. **PASS.**
 
 ---
 
-## NOTE: `all_raw_findings` parameter uses post-parse list
+## Task 25: Version-aware Rules Files (Batch 2)
 
-`_write_audit_trail` receives `findings_file.findings` as `all_raw_findings` (line 1242). At this point, `findings_file.findings` is the parsed list, not the pre-filter list. After step 3 (confidence filtering) and step 3b (merge), the `after_confidence` variable holds the filtered+merged list, but `findings_file.findings` is the original parsed findings (pre-filter, pre-merge). This means the audit trail's "Total raw" count reflects parsed findings before filtering — which is reasonable and informative. The "After filtering/capping" count reflects the `capped` list. **Not blocking — behavior is correct and informative.**
+**PASS.** All 7 files created in `commands/lang-rules/`:
+
+| File | Checklist Items | Version Sections |
+|------|----------------|-----------------|
+| rust.md | 30 | All Versions, Edition 2021, Edition 2024 |
+| cpp.md | 30 | Verified present |
+| swift.md | 30 | Verified present |
+| android.md | 30 | Verified present |
+| ruby.md | 30 | Verified present |
+| php.md | 30 | Verified present |
+| sql.md | 30 | Verified present |
+
+1. **Minimum item count.** All 7 files have >= 30 checklist items. **PASS.**
+2. **Spot-check rust.md.** Three version sections (All Versions, Edition 2021, Edition 2024). Rules cover `unwrap()` in library code, `unsafe` block documentation, `Arc<Mutex<T>>` over-use, Edition 2024 `gen` blocks and `async` closures. **PASS.**
 
 ---
 
-## NOTE: Prior review recommendations status
+## Task 26: Integration into review_job.py
 
-From Phase 3 review (dd0d6f0):
-1. "Add Phase 3 unit tests" — not addressed in Phase 4 (out of scope). Still recommended for future.
-2. "Update `_build_summary_markdown` category breakdown to include all 9 categories" — not addressed. Still recommended.
-3. "Correct test count in progress.json (252 → 249)" — the Phase 4 progress entry correctly reports 270, which matches. The Phase 3 entry still says 252 (actual was 249). Minor discrepancy, not blocking.
+**PASS.** Three integration points implemented correctly.
+
+1. **`_build_config_section` flow.** Method at `review_job.py:602-641`. Loads `.codereview.md` first — if present, `has_codereview_md = True` and auto-detection is skipped (line 627: `if not has_codereview_md`). If no `.codereview.md`, calls `_build_lang_rules_section()`. **PASS — existing override behavior preserved.**
+
+2. **`_build_lang_rules_section` implementation.** Method at `review_job.py:643-697`. Calls `stack_detector.detect(workspace)`, iterates detected languages, loads `commands/lang-rules/<lang>.md`, filters via `_filter_rules_for_version()`, and injects into prompt with "Auto-detected Stack" header and framework summary. **PASS.**
+
+3. **`_filter_rules_for_version` + `_version_heading_matches`.** At `review_job.py:36-126`. "All Versions" sections always included. Version-specific sections (e.g., ".NET 8+") included only when detected version >= required version. Comparison uses tuple-based integer comparison. Unknown versions default to inclusion (safe fallback). **PASS.**
+
+4. **`file_filter.py` registry lookup.** `load_registered_extensions()` at line 43 loads extensions from `languages.yml` via `yaml.safe_load`. `filter_changed_files()` at line 79 uses registry when available, falls back to blacklist when `languages.yml` is missing/broken. **PASS.**
+
+5. **`review-pr-core.md` Step 1 update.** Line 18: "If `.codereview.md` exists, load it — project-specific rules always take precedence. Otherwise, the system reads your project config files (package.json, *.csproj, go.mod, etc.) to detect exact framework versions and injects version-appropriate review rules automatically." **PASS.**
+
+---
+
+## Task 27 VERIFY: 302 Unit Tests
+
+**PASS.** `python -m pytest tests/ -v` completed in 23.25s: **302 passed, 13 skipped, 0 failed.**
+
+32 new Phase 5 tests in `tests/unit/test_phase5_lang_intelligence.py`:
+- `TestStackDetector` (11 tests): .NET 8 detection, .NET 6 detection, EF Core version, TypeScript from package.json, React overlay, Python from requirements.txt, Python version from pyproject, Go, Rust edition, empty workspace, dataclass defaults.
+- `TestLangRulesFiles` (5 tests): all 15 files exist, each has >= 30 checklist items, each has version sections, languages.yml has 15 entries, entries have required fields.
+- `TestVersionFiltering` (8 tests): "All Versions" always included, .NET 8+ included for .NET 8, .NET 8+ excluded for .NET 6, Python 3.10+ included for 3.12, Python 3.10+ excluded for 3.8, unknown version includes section, real csharp.md tests for both .NET 8 and .NET 6.
+- `TestFileFilterRegistryVerify` (3 tests): .cs reviewed when csharp registered, .json skipped when not registered, .codereview.md skipped.
+
+**Test quality assessment.** Coverage is meaningful:
+- Stack detector tested with real file parsing (csproj XML, package.json, pyproject.toml, go.mod, Cargo.toml) via `tmp_path` fixtures.
+- Version filtering tested at both unit level (synthetic rules) and integration level (real csharp.md file).
+- File filter registry tested with the actual `languages.yml` file.
+- Edge cases covered: empty workspace, unknown versions, overlay languages.
+
+**NOTE:** The import `import stack_detector as sd` at `review_job.py:646` is a lazy import inside the method — consistent with the codebase's bare-module import pattern (`from config import Settings`, etc.) which assumes `src/` is on `sys.path`. This works at runtime and in tests. No issue.
 
 ---
 
 ## Summary
 
-**All 3 Phase 4 tasks pass (19-21).** Phase 4 correctly adds comment merging (`merge_similar_findings`) with the specified criteria (same file, ±5 lines, 0.7 similarity threshold), severity-aware keeper selection with footnotes, and a comprehensive audit trail export to `.cr/` with all 7 required sections. The merge is correctly placed between confidence filtering and capping in the pipeline. The audit trail is written after summary posting and before output construction, with graceful error handling.
+**All 6 Phase 5 tasks (22–27) meet their "Done when" criteria. No regressions in Phases 1–4. 302 tests pass, 0 fail. Verdict: APPROVED.**
 
-Phases 1-3 have no regressions. All 270 unit tests pass (21 new).
-
-**Recommended (not blocking):**
-1. Wire `risk_table_md` from `review_job.py` into the `_write_audit_trail` call so the audit file includes the actual risk classification table instead of "not available".
-2. Carry forward Phase 3 recommendations: add Phase 3 unit tests, update summary markdown category breakdown to include all 9 categories.
+Phase 5 delivers a complete language intelligence system: 15-language registry in YAML, stack detector parsing 13 config file formats, 15 version-aware rules files with 30–40 checklist items each, version-gated filtering, and clean integration into the review pipeline with `.codereview.md` override preservation. Test coverage is comprehensive with 32 new tests covering detection, filtering, and registry modes.
