@@ -13,12 +13,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
 import subprocess
 import sys
 from collections import defaultdict
-from dataclasses import asdict
+from dataclasses import asdict, replace as dc_replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -264,6 +266,65 @@ def cap_findings(findings, max_total: int = MAX_TOTAL_FINDINGS, max_per_file: in
         capped.append(f)
 
     return capped
+
+
+def merge_similar_findings(findings):
+    """
+    Merge near-duplicate findings on the same file and nearby lines.
+
+    Merge criteria (ALL must match):
+    - Same file path
+    - Line numbers within +/- 5 of each other
+    - Title + message similarity > 0.7 (difflib.SequenceMatcher)
+
+    Keep the finding with higher severity. Append the merged finding's message
+    as a footnote: "(Also flagged at line {n}: {merged_title})".
+    """
+    if not findings:
+        return findings
+
+    severity_order = {"critical": 0, "warning": 1, "suggestion": 2}
+
+    def _similarity(a, b):
+        text_a = f"{a.title} {a.message}"
+        text_b = f"{b.title} {b.message}"
+        return difflib.SequenceMatcher(None, text_a, text_b).ratio()
+
+    by_file: Dict[str, list] = defaultdict(list)
+    for f in findings:
+        by_file[f.file].append(f)
+
+    result = []
+    for _, file_findings in by_file.items():
+        sorted_findings = sorted(file_findings, key=lambda f: f.line)
+        merged_flags = [False] * len(sorted_findings)
+
+        for i, fi in enumerate(sorted_findings):
+            if merged_flags[i]:
+                continue
+            current = fi
+            anchor_line = fi.line
+            for j in range(i + 1, len(sorted_findings)):
+                if merged_flags[j]:
+                    continue
+                fj = sorted_findings[j]
+                if abs(fj.line - anchor_line) > 5:
+                    break  # sorted by line; no more candidates within range
+                if _similarity(current, fj) > 0.7:
+                    merged_flags[j] = True
+                    fi_rank = severity_order.get(current.severity, 9)
+                    fj_rank = severity_order.get(fj.severity, 9)
+                    if fj_rank < fi_rank:
+                        # fj has higher severity — make it the keeper
+                        new_message = fj.message + f"\n\n*(Also flagged at line {current.line}: {current.title})*"
+                        current = dc_replace(fj, message=new_message)
+                    else:
+                        # current has higher or equal severity — keep it
+                        new_message = current.message + f"\n\n*(Also flagged at line {fj.line}: {fj.title})*"
+                        current = dc_replace(current, message=new_message)
+            result.append(current)
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -811,6 +872,146 @@ def _evaluate_gate(
 
 
 # ---------------------------------------------------------------------------
+# Audit trail export
+# ---------------------------------------------------------------------------
+
+def _write_audit_trail(
+    workspace: str,
+    findings_file,
+    all_raw_findings: list,
+    capped_findings: list,
+    score,
+    gate_result: Dict[str, Any],
+    files_reviewed_set: set,
+    all_code_paths: set,
+    coverage_ratio: float,
+    usage=None,
+    cost_estimate: Optional[Dict[str, Any]] = None,
+    pr_details=None,
+    risk_table_md: str = "",
+) -> Optional[str]:
+    """Write a timestamped audit trail markdown file to .cr/ in the workspace."""
+    cr_dir = Path(workspace) / ".cr"
+    cr_dir.mkdir(parents=True, exist_ok=True)
+
+    pr_id = findings_file.pr_id
+    now = datetime.now()
+    export_path = cr_dir / f"review_{pr_id}_{now:%Y%m%d_%H%M%S}.md"
+
+    lines = [
+        f"# Code Review Audit Trail — PR #{pr_id}",
+        "",
+        f"**Generated:** {now:%Y-%m-%d %H:%M:%S}",
+        "",
+        "---",
+        "",
+        "## PR Metadata",
+        "",
+        f"- **PR ID:** {pr_id}",
+        f"- **Repo:** {findings_file.repo}",
+        f"- **VCS:** {findings_file.vcs}",
+        f"- **Review Modes:** {', '.join(findings_file.review_modes)}",
+    ]
+
+    if pr_details:
+        lines += [
+            f"- **Branch:** `{getattr(pr_details, 'source_branch', 'N/A')}` → `{getattr(pr_details, 'target_branch', 'N/A')}`",
+            f"- **Author:** {getattr(pr_details, 'author', 'N/A')}",
+            f"- **Title:** {getattr(pr_details, 'title', 'N/A')}",
+        ]
+
+    lines += ["", "---", "", "## Score Breakdown", ""]
+
+    if score:
+        lines += [
+            f"- **Overall Rating:** {score.overall_stars} ({score.quality_level})",
+            f"- **Total Penalty:** {score.total_penalty:.1f} points",
+            "",
+            "### Category Penalties",
+            "",
+            "| Category | Penalty |",
+            "|----------|---------|",
+        ]
+        for cat, penalty in sorted(score.category_penalties.items()):
+            lines.append(f"| {cat} | {penalty:.1f} |")
+    else:
+        lines.append("*(Score not available)*")
+
+    not_reviewed = sorted(all_code_paths - files_reviewed_set)
+    lines += [
+        "", "---", "", "## Files Reviewed", "",
+        f"- **Reviewed:** {_coverage_display(len(files_reviewed_set), len(all_code_paths))}",
+        f"- **Coverage:** {coverage_ratio:.1%}",
+    ]
+    if not_reviewed:
+        lines += ["", "### Files Not Reviewed", ""]
+        for fp in not_reviewed:
+            lines.append(f"- `{fp}`")
+
+    lines += ["", "---", "", "## Findings", "",
+              f"*(Total raw: {len(all_raw_findings)}, After filtering/capping: {len(capped_findings)})*", ""]
+
+    if capped_findings:
+        lines += [
+            "| Severity | Category | File | Line | Title | Confidence |",
+            "|----------|----------|------|------|-------|------------|",
+        ]
+        for f in capped_findings:
+            lines.append(f"| {f.severity} | {f.category} | `{f.file}` | {f.line} | {f.title} | {f.confidence:.0%} |")
+    else:
+        lines.append("*(No findings after filtering)*")
+
+    capped_ids = {f.id for f in capped_findings}
+    filtered_out = [f for f in all_raw_findings if f.id not in capped_ids]
+    if filtered_out:
+        lines += [
+            "", "### Filtered/Capped Findings (not posted)", "",
+            "| Severity | Category | File | Line | Title | Confidence |",
+            "|----------|----------|------|------|-------|------------|",
+        ]
+        for f in filtered_out:
+            lines.append(f"| {f.severity} | {f.category} | `{f.file}` | {f.line} | {f.title} | {f.confidence:.0%} |")
+
+    lines += ["", "---", "", "## Token Usage", ""]
+    if usage:
+        lines += [
+            f"- **Model:** {usage.model or 'unknown'}",
+            f"- **Input tokens:** {usage.input_tokens:,}",
+            f"- **Output tokens:** {usage.output_tokens:,}",
+            f"- **Total tokens:** {usage.total_tokens:,}",
+        ]
+        if usage.duration_seconds is not None:
+            lines.append(f"- **Duration:** {usage.duration_seconds:.1f}s")
+        if cost_estimate and cost_estimate.get("total_cost_usd") is not None:
+            lines.append(f"- **Estimated cost:** ${cost_estimate['total_cost_usd']:.4f}")
+    else:
+        lines.append("*(Usage not available)*")
+
+    lines += ["", "---", "", "## Risk Classification", ""]
+    if risk_table_md:
+        lines.append(risk_table_md)
+    else:
+        lines.append("*(Risk classification not available for this review)*")
+
+    lines += ["", "---", "", "## Gate Decision", ""]
+    gate_passed = gate_result.get("passed", True)
+    lines.append(f"**Result:** {'PASSED ✅' if gate_passed else 'FAILED 🚨'}")
+    if gate_result.get("reasons"):
+        lines += ["", "**Reasons:**", ""]
+        for reason in gate_result["reasons"]:
+            lines.append(f"- {reason}")
+    lines.append("")
+
+    content = "\n".join(lines)
+    try:
+        export_path.write_text(content, encoding="utf-8")
+        return str(export_path)
+    except Exception as exc:
+        _eprint(f"Warning: failed to write audit trail: {exc}")
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -856,6 +1057,10 @@ def run(
     else:
         after_confidence = filter_by_confidence(findings_file.findings, MIN_CONFIDENCE)
         filtered_count = len(findings_file.findings) - len(after_confidence)
+
+    # 3b. Merge near-duplicate findings (skip for verify-only)
+    if not is_verify_only:
+        after_confidence = merge_similar_findings(after_confidence)
 
     # 4. Apply mode multipliers (adjusts severity for scoring)
     from pr_scorer import PRScorer
@@ -1029,6 +1234,22 @@ def run(
                 )
         except Exception as exc:
             _eprint(f"Warning: failed to post summary: {exc}")
+
+    # 13b. Write audit trail
+    _write_audit_trail(
+        workspace=workspace,
+        findings_file=findings_file,
+        all_raw_findings=findings_file.findings,
+        capped_findings=capped,
+        score=score,
+        gate_result=gate_result,
+        files_reviewed_set=files_reviewed_set,
+        all_code_paths=all_code_paths,
+        coverage_ratio=coverage_ratio,
+        usage=findings_file.usage,
+        cost_estimate=cost_estimate,
+        pr_details=pr_details,
+    )
 
     # Build output
     output = {
