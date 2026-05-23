@@ -111,7 +111,7 @@ class Settings(BaseSettings):
         description="Comma-separated list of file extensions to skip during review"
     )
     smart_diff_threshold_kb: int = Field(
-        default=30,
+        default=15,
         ge=1,
         le=500,
         description="Diff size threshold in KB above which smart summarization is used"
@@ -164,7 +164,7 @@ class Settings(BaseSettings):
         description="Max retries for Pass 1 JSON parsing failures before falling back to single-pass"
     )
     verify_pass_max_turns: int = Field(
-        default=10,
+        default=7,
         ge=5,
         le=40,
         description="Max agent turns for Pass 2 (verify) — shorter than single-pass since candidates are pre-identified"

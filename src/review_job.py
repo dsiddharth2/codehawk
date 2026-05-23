@@ -1007,6 +1007,28 @@ class ReviewJob:
                 except Exception:
                     pass
 
+        # Risk context — guides the model on which files to scrutinize
+        if analysis:
+            lines.append("## Risk Context")
+            lines.append("")
+            lines.append(f"Risk score: {analysis.get('risk_score', 0)}")
+            priorities = analysis.get("review_priorities", [])
+            if priorities:
+                lines.append("Review priorities:")
+                for p in priorities[:10]:
+                    lines.append(f"- `{p['name']}` in `{p['file']}`")
+            test_gaps = analysis.get("test_gaps", [])
+            if test_gaps:
+                lines.append("Test gaps (no test coverage):")
+                for tg in test_gaps[:10]:
+                    lines.append(f"- `{tg['name']}` in `{tg['file']}`")
+            impacted = analysis.get("impacted_functions", [])
+            if impacted:
+                lines.append("Impacted functions (blast radius):")
+                for fn in impacted[:10]:
+                    lines.append(f"- `{fn['name']}` in `{fn['file']}`")
+            lines.append("")
+
         # Lang-specific rules
         file_paths = [fc if isinstance(fc, str) else fc.path for fc in (changed_files or [])]
         lines.append(self._build_config_section(file_paths))
@@ -1226,7 +1248,7 @@ class ReviewJob:
         )
 
         max_turns = getattr(self.settings, "verify_pass_max_turns", 10)
-        result = runner.run(verify_prompt, max_turns=max_turns, use_sliding_window=False)
+        result = runner.run(verify_prompt, max_turns=max_turns, use_sliding_window=True)
 
         if result.findings_data is None and hasattr(self, "_scan_candidates"):
             logger.warning("Pass 2 failed to produce findings — using Pass 1 candidates as fallback")

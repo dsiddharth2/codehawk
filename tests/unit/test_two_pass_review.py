@@ -57,7 +57,7 @@ class TestTwoPassConfig:
         )
         assert s.two_pass_enabled is True
         assert s.scan_pass_max_retries == 1
-        assert s.verify_pass_max_turns == 10
+        assert s.verify_pass_max_turns == 7
 
     def test_config_override_from_env(self):
         from config import Settings
@@ -629,7 +629,7 @@ class TestRunVerifyPass:
         assert len(result.findings_data["findings"]) == 1
 
         mock_runner.run.assert_called_once_with(
-            "verify prompt", max_turns=10, use_sliding_window=False,
+            "verify prompt", max_turns=10, use_sliding_window=True,
         )
 
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"})
@@ -741,10 +741,10 @@ class TestCreateFindingsTwoPass:
 
         # Verify Pass 1A + 1B were called (2 single-turn calls)
         assert mock_runner.run_single_turn.call_count == 2
-        # Verify Pass 2 was called with use_sliding_window=False
+        # Verify Pass 2 was called with use_sliding_window=True
         mock_runner.run.assert_called_once()
         call_kwargs = mock_runner.run.call_args
-        assert call_kwargs[1].get("use_sliding_window") is False
+        assert call_kwargs[1].get("use_sliding_window") is True
 
         # Verify findings were written
         assert path.exists()
