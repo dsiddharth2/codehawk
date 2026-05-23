@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -23,6 +24,8 @@ from dataclasses import asdict, replace as dc_replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+logger = logging.getLogger("codehawk.post_findings")
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -138,22 +141,90 @@ CATEGORY_REMAP = {
     "formatting": "code_style",
 }
 
+VALID_SEVERITIES = {"critical", "warning", "suggestion"}
+SEVERITY_REMAP = {
+    "major": "warning",
+    "minor": "suggestion",
+    "error": "critical",
+    "high": "critical",
+    "medium": "warning",
+    "low": "suggestion",
+    "info": "suggestion",
+    "blocker": "critical",
+}
+
 
 _VALID_FINDING_KEYS = {"id", "file", "line", "severity", "category", "title", "message", "confidence", "suggestion"}
 
 
 def _normalize_findings(data: dict) -> None:
-    """Remap agent-invented categories, fill missing fields, strip unknown keys."""
-    for f in data.get("findings", []):
-        cat = f.get("category", "")
+    """Defensive normalization — treat model output as untrusted input.
+
+    Guarantees every finding has all required fields with correct types.
+    Coerces, defaults, and logs rather than crashing.
+    """
+    if not isinstance(data.get("findings"), list):
+        data["findings"] = []
+    if not isinstance(data.get("fix_verifications"), list):
+        data["fix_verifications"] = []
+
+    valid_findings = []
+    for i, f in enumerate(data["findings"]):
+        if not isinstance(f, dict):
+            logger.warning("findings[%d] is not a dict — skipping", i)
+            continue
+
+        f.setdefault("id", f"cr-{i + 1:03d}")
+        f.setdefault("file", "unknown")
+        f.setdefault("title", "")
+        f.setdefault("message", f.get("title", ""))
+        f.setdefault("severity", "warning")
+        f.setdefault("category", "best_practices")
+        f.setdefault("confidence", 0.7)
+
+        if not f["title"] and f["message"]:
+            f["title"] = (f["message"][:80] + "...") if len(f["message"]) > 80 else f["message"]
+
+        if not isinstance(f.get("line"), (int, float)):
+            try:
+                f["line"] = int(f.get("line", 0))
+            except (TypeError, ValueError):
+                f["line"] = 0
+
+        if not isinstance(f.get("confidence"), (int, float)):
+            try:
+                f["confidence"] = float(f.get("confidence", 0.7))
+            except (TypeError, ValueError):
+                f["confidence"] = 0.7
+        f["confidence"] = max(0.0, min(1.0, float(f["confidence"])))
+
+        cat = f["category"]
         if cat not in VALID_CATEGORIES:
             f["category"] = CATEGORY_REMAP.get(cat, "best_practices")
-        if "title" not in f:
-            msg = f.get("message", "")
-            f["title"] = (msg[:80] + "...") if len(msg) > 80 else msg
+
+        sev = f["severity"]
+        if sev not in VALID_SEVERITIES:
+            original = sev
+            f["severity"] = SEVERITY_REMAP.get(str(sev).lower(), "warning")
+            logger.warning("Remapped invalid severity %r → %r for %s", original, f["severity"], f.get("id"))
+
         extra = set(f.keys()) - _VALID_FINDING_KEYS
         for k in extra:
             del f[k]
+
+        valid_findings.append(f)
+
+    data["findings"] = valid_findings
+
+    valid_fv = []
+    for i, fv in enumerate(data["fix_verifications"]):
+        if not isinstance(fv, dict):
+            continue
+        fv.setdefault("cr_id", f"unknown-{i}")
+        fv.setdefault("status", "not_relevant")
+        fv.setdefault("reason", "")
+        valid_fv.append(fv)
+    data["fix_verifications"] = valid_fv
 
 
 def _validate_schema(data: dict) -> List[str]:
@@ -193,45 +264,52 @@ def _parse_findings_file(data: dict):
     """
     from models.review_models import Finding, FindingsFile, FixVerification, Usage
 
-    findings = [
-        Finding(
-            id=f["id"],
-            file=f["file"],
-            line=f["line"],
-            severity=f["severity"],
-            category=f["category"],
-            title=f["title"],
-            message=f["message"],
-            confidence=f["confidence"],
-            suggestion=f.get("suggestion"),
-        )
-        for f in data.get("findings", [])
-    ]
+    findings = []
+    for f in data.get("findings", []):
+        try:
+            findings.append(Finding(
+                id=f.get("id", "cr-???"),
+                file=f.get("file", "unknown"),
+                line=int(f.get("line", 0)),
+                severity=f.get("severity", "warning"),
+                category=f.get("category", "best_practices"),
+                title=f.get("title", ""),
+                message=f.get("message", ""),
+                confidence=float(f.get("confidence", 0.7)),
+                suggestion=f.get("suggestion"),
+            ))
+        except Exception as exc:
+            logger.warning("Skipping unparseable finding %s: %s", f.get("id", "?"), exc)
 
-    fix_verifications = [
-        FixVerification(
-            cr_id=fv["cr_id"],
-            status=fv["status"],
-            reason=fv["reason"],
-        )
-        for fv in data.get("fix_verifications", [])
-    ]
+    fix_verifications = []
+    for fv in data.get("fix_verifications", []):
+        try:
+            fix_verifications.append(FixVerification(
+                cr_id=fv.get("cr_id", "unknown"),
+                status=fv.get("status", "not_relevant"),
+                reason=fv.get("reason", ""),
+            ))
+        except Exception as exc:
+            logger.warning("Skipping unparseable fix_verification: %s", exc)
 
     usage = None
     raw_usage = data.get("usage")
     if raw_usage and isinstance(raw_usage, dict):
-        usage = Usage(
-            input_tokens=raw_usage["input_tokens"],
-            output_tokens=raw_usage["output_tokens"],
-            total_tokens=raw_usage["total_tokens"],
-            model=raw_usage.get("model"),
-            duration_seconds=raw_usage.get("duration_seconds"),
-        )
+        try:
+            usage = Usage(
+                input_tokens=int(raw_usage.get("input_tokens", 0)),
+                output_tokens=int(raw_usage.get("output_tokens", 0)),
+                total_tokens=int(raw_usage.get("total_tokens", 0)),
+                model=raw_usage.get("model"),
+                duration_seconds=raw_usage.get("duration_seconds"),
+            )
+        except Exception as exc:
+            logger.warning("Failed to parse usage data: %s", exc)
 
     return FindingsFile(
-        pr_id=data["pr_id"],
-        repo=data["repo"],
-        vcs=data["vcs"],
+        pr_id=data.get("pr_id", 0),
+        repo=data.get("repo", ""),
+        vcs=data.get("vcs", "ado"),
         review_modes=data.get("review_modes", []),
         summary=data.get("summary"),
         findings=findings,
@@ -1047,10 +1125,9 @@ def run(
     _normalize_findings(raw)
     errors = _validate_schema(raw)
     if errors:
-        _eprint("ERROR: findings.json failed schema validation:")
+        logger.warning("findings.json has schema issues (continuing with best-effort):")
         for e in errors:
-            _eprint(f"  - {e}")
-        raise SystemExit(1)
+            logger.warning("  - %s", e)
 
     findings_file = _parse_findings_file(raw)
     # Track whether agent explicitly included files_clean (opted into coverage tracking)
