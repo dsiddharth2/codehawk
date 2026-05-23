@@ -123,10 +123,10 @@ class Settings(BaseSettings):
         description="Number of code files per review batch"
     )
     batch_max_turns: int = Field(
-        default=40,
+        default=10,
         ge=5,
         le=100,
-        description="Maximum agent turns per batch review session"
+        description="Maximum agent turns per batch review session (used by single-pass fallback and Pass 2 verify)"
     )
     max_total_findings: int = Field(
         default=50,
@@ -152,6 +152,24 @@ class Settings(BaseSettings):
         le=1.0,
         description="File risk score >= this threshold is classified MEDIUM (below = LOW)"
     )
+    # Two-pass review configuration
+    two_pass_enabled: bool = Field(
+        default=True,
+        description="Enable two-pass review (Pass 1: scan, Pass 2: verify). When False, uses single-pass agent loop."
+    )
+    scan_pass_max_retries: int = Field(
+        default=1,
+        ge=0,
+        le=3,
+        description="Max retries for Pass 1 JSON parsing failures before falling back to single-pass"
+    )
+    verify_pass_max_turns: int = Field(
+        default=10,
+        ge=5,
+        le=40,
+        description="Max agent turns for Pass 2 (verify) — shorter than single-pass since candidates are pre-identified"
+    )
+
     max_per_file_findings: int = Field(
         default=5,
         description="Maximum findings to post per file"

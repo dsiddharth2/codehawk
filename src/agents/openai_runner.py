@@ -149,7 +149,7 @@ def _build_sliding_window_input(
             ),
         })
 
-    recent = tool_history[-window_size:] if window_size > 0 else []
+    recent = tool_history[-window_size:] if window_size > 0 else tool_history
     for exchange in recent:
         items.append(exchange["call"])
         items.append(exchange["output"])
@@ -202,10 +202,71 @@ class OpenAIAgentRunner:
     def _use_responses_api(self) -> bool:
         return self.model in RESPONSES_API_MODELS
 
-    def run(self, prompt: str, max_turns: int = 40) -> AgentResult:
+    def run(self, prompt: str, max_turns: int = 40, use_sliding_window: bool = True) -> AgentResult:
         if self._use_responses_api:
-            return self._run_responses(prompt, max_turns)
+            return self._run_responses(prompt, max_turns, use_sliding_window=use_sliding_window)
         return self._run_chat_completions(prompt, max_turns)
+
+    def run_single_turn(self, system_prompt: str, user_prompt: str) -> AgentResult:
+        """Single-turn API call with no tools. Used for Pass 1 (scan)."""
+        result = AgentResult()
+        result.model = self.model
+        result.turns = 1
+        start_time = time.time()
+
+        try:
+            if self._use_responses_api:
+                kwargs = {
+                    "model": self.model,
+                    "instructions": system_prompt,
+                    "input": [{"type": "message", "role": "user", "content": user_prompt}],
+                }
+                if "codex" not in self.model:
+                    kwargs["temperature"] = 0.3
+                response = self.client.responses.create(**kwargs)
+
+                if response.usage:
+                    result.input_tokens = response.usage.input_tokens
+                    result.output_tokens = response.usage.output_tokens
+                    result.total_tokens = response.usage.input_tokens + response.usage.output_tokens
+
+                for item in response.output:
+                    if item.type == "message":
+                        for content in item.content:
+                            if hasattr(content, "text"):
+                                result.raw_final_message = content.text
+            else:
+                chat_kwargs = {
+                    "model": self.model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                }
+                if "codex" not in self.model:
+                    chat_kwargs["temperature"] = 0.3
+                    chat_kwargs["seed"] = 42
+                response = self.client.chat.completions.create(**chat_kwargs)
+
+                if response.usage:
+                    result.input_tokens = response.usage.prompt_tokens
+                    result.output_tokens = response.usage.completion_tokens
+                    result.total_tokens = response.usage.total_tokens
+
+                if response.choices and response.choices[0].message.content:
+                    result.raw_final_message = response.choices[0].message.content
+
+        except Exception as e:
+            logger.error("Single-turn API call failed: %s", e)
+            result.returncode = 1
+
+        result.duration_seconds = round(time.time() - start_time, 1)
+        logger.info(
+            "Single-turn complete: tokens=%s (in:%s out:%s), duration=%.1fs",
+            f"{result.total_tokens:,}", f"{result.input_tokens:,}", f"{result.output_tokens:,}",
+            result.duration_seconds,
+        )
+        return result
 
     # ------------------------------------------------------------------
     # Chat Completions API (gpt-4o-mini, gpt-4.1, o3, etc.)
@@ -368,7 +429,7 @@ class OpenAIAgentRunner:
     # Responses API (gpt-5-codex, codex-mini-latest, etc.)
     # ------------------------------------------------------------------
 
-    def _run_responses(self, prompt: str, max_turns: int = 40) -> AgentResult:
+    def _run_responses(self, prompt: str, max_turns: int = 40, use_sliding_window: bool = True) -> AgentResult:
         result = AgentResult()
         result.model = self.model
         start_time = time.time()
@@ -385,11 +446,12 @@ class OpenAIAgentRunner:
         for turn in range(max_turns):
             result.turns = turn + 1
 
+            window_size = SLIDING_WINDOW_SIZE if use_sliding_window else 0
             input_items = _build_sliding_window_input(
                 original_prompt=prompt,
                 tool_history=tool_history,
                 findings_draft=findings_draft,
-                window_size=SLIDING_WINDOW_SIZE,
+                window_size=window_size,
             )
 
             if turn == max_turns - 3:

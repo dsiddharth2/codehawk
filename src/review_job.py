@@ -222,8 +222,6 @@ class ReviewJob:
             except Exception as exc:
                 logger.warning("PR pre-fetch skipped: %s", exc)
 
-        prompt = self._build_prompt(changed_files=changed_files, skipped_count=skipped_count)
-
         # Phase 0: Build code graph (or reuse pre-built graph from batch orchestrator)
         graph_store = self.config.pre_built_graph
         if graph_store is not None:
@@ -253,22 +251,30 @@ class ReviewJob:
         # Pre-compute graph analysis and fetch all diffs to inject into prompt
         analysis = self._pre_compute_analysis(graph_store, changed_file_paths)
         diffs, failed_diffs = self._pre_fetch_diffs(changed_file_paths, source_commit, target_commit)
-        if analysis or diffs or failed_diffs:
-            prompt += self._build_review_context(analysis, diffs, changed_files, failed_diffs)
 
-        runner = OpenAIAgentRunner(
-            settings=self.settings,
-            workspace=self.config.workspace,
-            model=self.config.model,
-            pr_id=self.config.pr_id,
-            repo=self.config.repo,
-            graph_store=graph_store,
-            changed_files=changed_file_paths,
-            source_commit_id=source_commit,
-            target_commit_id=target_commit,
-        )
+        two_pass_enabled = getattr(self.settings, "two_pass_enabled", True)
 
-        self._agent_result = runner.run(prompt, max_turns=self.config.max_turns)
+        if two_pass_enabled:
+            try:
+                self._agent_result = self._run_two_pass(
+                    changed_files, changed_file_paths, diffs, failed_diffs, analysis, graph_store,
+                    source_commit, target_commit,
+                )
+            except Exception as exc:
+                logger.warning("Two-pass flow failed (%s) — falling back to single-pass", exc)
+                prompt = self._build_single_pass_prompt(
+                    changed_files, skipped_count, analysis, diffs, failed_diffs,
+                )
+                self._agent_result = self._run_single_pass(
+                    prompt, graph_store, changed_file_paths, source_commit, target_commit,
+                )
+        else:
+            prompt = self._build_single_pass_prompt(
+                changed_files, skipped_count, analysis, diffs, failed_diffs,
+            )
+            self._agent_result = self._run_single_pass(
+                prompt, graph_store, changed_file_paths, source_commit, target_commit,
+            )
 
         if not self._agent_result.findings_data:
             import warnings
@@ -723,6 +729,377 @@ class ReviewJob:
 
         logger.info("Injected lang-rules for: %s", ", ".join(profile.languages[:rules_injected]))
         return lines
+
+    def _build_single_pass_prompt(
+        self, changed_files, skipped_count, analysis, diffs, failed_diffs,
+    ) -> str:
+        """Build the full prompt for single-pass mode (or two-pass fallback)."""
+        prompt = self._build_prompt(changed_files=changed_files, skipped_count=skipped_count)
+        if analysis or diffs or failed_diffs:
+            prompt += self._build_review_context(analysis, diffs, changed_files, failed_diffs)
+        return prompt
+
+    # ------------------------------------------------------------------
+    # Two-pass review helpers
+    # ------------------------------------------------------------------
+
+    def _run_single_pass(
+        self, prompt, graph_store, changed_file_paths, source_commit, target_commit,
+    ) -> AgentResult:
+        """Original single-pass agent loop (fallback path)."""
+        runner = OpenAIAgentRunner(
+            settings=self.settings,
+            workspace=self.config.workspace,
+            model=self.config.model,
+            pr_id=self.config.pr_id,
+            repo=self.config.repo,
+            graph_store=graph_store,
+            changed_files=changed_file_paths,
+            source_commit_id=source_commit,
+            target_commit_id=target_commit,
+        )
+        return runner.run(prompt, max_turns=self.config.max_turns)
+
+    def _run_two_pass(
+        self, changed_files, changed_file_paths, diffs, failed_diffs, analysis,
+        graph_store, source_commit, target_commit,
+    ) -> AgentResult:
+        """Two-pass review: Pass 1 (scan) → Pass 2 (verify)."""
+        # --- Pass 1: Scan ---
+        scan_prompt = self._build_scan_prompt(changed_files, diffs, analysis, failed_diffs)
+        candidates, files_clean, scan_result = self._run_scan_pass(scan_prompt)
+
+        # Store for fallback use in _run_verify_pass
+        self._scan_candidates = candidates
+        self._scan_files_clean = files_clean
+
+        # If no candidates, skip Pass 2
+        if not candidates:
+            logger.info("Pass 1 found no candidates — skipping Pass 2")
+            result = AgentResult()
+            result.model = scan_result.model if hasattr(scan_result, 'model') else self.config.model
+            result.input_tokens = scan_result.input_tokens
+            result.output_tokens = scan_result.output_tokens
+            result.total_tokens = scan_result.total_tokens
+            result.duration_seconds = scan_result.duration_seconds if hasattr(scan_result, 'duration_seconds') else 0
+            result.findings_data = {
+                "pr_id": self.config.pr_id,
+                "repo": self.config.repo,
+                "vcs": self.config.vcs,
+                "review_modes": ["standard"],
+                "findings": [],
+                "files_clean": files_clean,
+                "fix_verifications": [],
+            }
+            return result
+
+        # --- Pass 2: Verify ---
+        verify_prompt = self._build_verify_prompt(candidates, diffs, changed_file_paths)
+        verify_result = self._run_verify_pass(verify_prompt)
+
+        # Merge token usage from both passes
+        verify_result.input_tokens += scan_result.input_tokens
+        verify_result.output_tokens += scan_result.output_tokens
+        verify_result.total_tokens += scan_result.total_tokens
+
+        return verify_result
+
+    def _parse_candidates(self, raw_text: str) -> tuple[list, list[str]]:
+        """Parse Pass 1 output into ScanCandidate list and files_clean list.
+
+        Raises ValueError if JSON is malformed or missing required keys.
+        """
+        from agents.openai_runner import _extract_findings_json
+        from models.review_models import ScanCandidate
+
+        data = _extract_findings_json(raw_text)
+        if data is None:
+            raise ValueError(f"Failed to parse candidate JSON from Pass 1 output")
+
+        if "candidates" not in data:
+            raise ValueError("Missing 'candidates' key in Pass 1 output")
+
+        candidates = []
+        for c in data["candidates"]:
+            candidates.append(ScanCandidate(
+                file=c["file"],
+                line=c.get("line", 0),
+                category=c.get("category", "best_practices"),
+                severity=c.get("severity", "suggestion"),
+                title=c.get("title", ""),
+                message=c.get("message", ""),
+                needs_verification=c.get("needs_verification", False),
+                verification_hint=c.get("verification_hint"),
+                checklist_source=c.get("checklist_source"),
+            ))
+
+        files_clean = data.get("files_clean", [])
+        return candidates, files_clean
+
+    def _build_scan_prompt(
+        self,
+        changed_files,
+        diffs: dict[str, str],
+        analysis: dict,
+        failed_diffs: list[str] | None = None,
+    ) -> str:
+        """Build the user prompt for Pass 1 (scan) — diffs + checklists + risk context."""
+        commands_dir = Path(__file__).resolve().parent.parent / "commands"
+        scan_template = commands_dir / "review-scan.md"
+
+        lines = []
+        if scan_template.is_file():
+            lines.append(scan_template.read_text(encoding="utf-8"))
+        else:
+            lines.append("Identify candidate findings from the diffs below. Output JSON with candidates[] and files_clean[].")
+
+        lines.append("")
+
+        # Review mode checklists (same as single-pass — agent needs these to apply)
+        lines.append(self._build_review_modes_section())
+
+        # Lang-specific rules
+        lines.append(self._build_config_section())
+
+        # Risk context
+        if analysis:
+            lines.append("## Risk Context")
+            lines.append("")
+            lines.append(f"Risk score: {analysis.get('risk_score', 0)}")
+            priorities = analysis.get("review_priorities", [])
+            if priorities:
+                lines.append("Review priorities:")
+                for p in priorities[:10]:
+                    lines.append(f"- `{p['name']}` in `{p['file']}`")
+            test_gaps = analysis.get("test_gaps", [])
+            if test_gaps:
+                lines.append("Test gaps (no test coverage):")
+                for tg in test_gaps[:10]:
+                    lines.append(f"- `{tg['name']}` in `{tg['file']}`")
+            lines.append("")
+
+        # Diffs
+        if diffs:
+            lines.append("## File Diffs")
+            lines.append("")
+            for fp, diff_text in diffs.items():
+                lines.append(f"### `{fp}`")
+                if diff_text.startswith("[DIFF SUMMARY]"):
+                    lines.append(diff_text)
+                else:
+                    lines.append(f"```diff\n{diff_text}\n```")
+                lines.append("")
+
+        if failed_diffs:
+            lines.append("## Files With Failed Diff Fetch")
+            lines.append("Mark these as `needs_verification: true` with hint 'Diff could not be pre-fetched':")
+            for fp in failed_diffs:
+                lines.append(f"- `{fp}`")
+            lines.append("")
+
+        return "\n".join(lines)
+
+    def _build_verify_prompt(
+        self,
+        candidates: list,
+        diffs: dict[str, str],
+        all_file_paths: list[str],
+    ) -> str:
+        """Build the user prompt for Pass 2 (verify) — candidates + relevant diffs + scoring rules."""
+        commands_dir = Path(__file__).resolve().parent.parent / "commands"
+        verify_template = commands_dir / "review-verify.md"
+
+        lines = []
+        if verify_template.is_file():
+            lines.append(verify_template.read_text(encoding="utf-8"))
+        else:
+            lines.append("Verify the candidate findings below. Output findings.json.")
+
+        lines.append("")
+
+        # Token substitution
+        lines.append(f"PR ID: {self.config.pr_id}")
+        lines.append(f"Repository: {self.config.repo}")
+        lines.append(f"VCS: {self.config.vcs}")
+        lines.append("")
+
+        # Candidate findings table
+        lines.append("## Candidate Findings to Verify")
+        lines.append("")
+        if candidates:
+            lines.append("| # | File | Line | Category | Severity | Title | Needs Verification | Hint |")
+            lines.append("|---|------|------|----------|----------|-------|--------------------|------|")
+            for i, c in enumerate(candidates, 1):
+                hint = c.verification_hint or "—"
+                lines.append(
+                    f"| {i} | `{c.file}` | {c.line} | {c.category} | {c.severity} | {c.title} | {c.needs_verification} | {hint} |"
+                )
+            lines.append("")
+            lines.append("### Candidate Details")
+            lines.append("")
+            for i, c in enumerate(candidates, 1):
+                lines.append(f"**Candidate {i}: {c.title}**")
+                lines.append(f"- File: `{c.file}`, line {c.line}")
+                lines.append(f"- Category: {c.category}, severity: {c.severity}")
+                lines.append(f"- Message: {c.message}")
+                if c.needs_verification and c.verification_hint:
+                    lines.append(f"- **Verification needed:** {c.verification_hint}")
+                lines.append("")
+        else:
+            lines.append("No candidates to verify. Produce empty findings.")
+            lines.append("")
+
+        # Files clean from Pass 1 (informational — carry forward)
+        clean_files_from_candidates = set(all_file_paths) - {c.file for c in candidates}
+        if clean_files_from_candidates:
+            lines.append("## Files Already Clean (from Pass 1)")
+            lines.append("These files had no candidates. Include them in `files_clean[]`:")
+            for fp in sorted(clean_files_from_candidates):
+                lines.append(f"- `{fp}`")
+            lines.append("")
+
+        # Relevant diffs only (files with candidates)
+        candidate_files = {c.file for c in candidates}
+        relevant_diffs = {fp: d for fp, d in diffs.items() if fp in candidate_files}
+        if relevant_diffs:
+            lines.append("## Diffs (candidate files only)")
+            lines.append("")
+            for fp, diff_text in relevant_diffs.items():
+                lines.append(f"### `{fp}`")
+                if diff_text.startswith("[DIFF SUMMARY]"):
+                    lines.append(diff_text)
+                else:
+                    lines.append(f"```diff\n{diff_text}\n```")
+                lines.append("")
+
+        # Scoring rules
+        scoring_path = commands_dir / "scoring.md"
+        if scoring_path.is_file():
+            try:
+                scoring_content = scoring_path.read_text(encoding="utf-8")
+                lines.append("## Scoring Reference")
+                lines.append("")
+                lines.append(scoring_content)
+                lines.append("")
+            except Exception:
+                pass
+
+        return "\n".join(lines)
+
+    def _run_scan_pass(self, scan_prompt: str) -> tuple[list, list[str], "AgentResult"]:
+        """Run Pass 1 (scan) — single-turn API call to identify candidates.
+
+        Returns (candidates, files_clean, agent_result).
+        Raises ValueError if all retries exhausted.
+        """
+        scan_system_prompt = (
+            "You are a code review scanner. Identify candidate findings from pre-injected diffs. "
+            "Output structured JSON with candidates[] and files_clean[]. "
+            "You have NO tools available — work only from the diffs provided."
+        )
+
+        runner = OpenAIAgentRunner(
+            settings=self.settings,
+            workspace=self.config.workspace,
+            model=self.config.model,
+            pr_id=self.config.pr_id,
+            repo=self.config.repo,
+        )
+
+        max_retries = getattr(self.settings, "scan_pass_max_retries", 1)
+        last_error = None
+
+        for attempt in range(1 + max_retries):
+            prompt = scan_prompt
+            if attempt > 0:
+                prompt += (
+                    "\n\n---\n\n**Your previous response was not valid JSON. "
+                    "You MUST output a single JSON object in a ```json code fence "
+                    "with keys 'candidates' (array) and 'files_clean' (array). Try again.**"
+                )
+
+            result = runner.run_single_turn(scan_system_prompt, prompt)
+
+            if result.returncode != 0:
+                last_error = ValueError(f"Pass 1 API call failed (attempt {attempt + 1})")
+                logger.warning("Pass 1 attempt %d failed: API error", attempt + 1)
+                continue
+
+            try:
+                candidates, files_clean = self._parse_candidates(result.raw_final_message)
+                logger.info(
+                    "Pass 1 complete: %d candidates (%d need verification), %d clean files",
+                    len(candidates),
+                    sum(1 for c in candidates if c.needs_verification),
+                    len(files_clean),
+                )
+                return candidates, files_clean, result
+            except ValueError as e:
+                last_error = e
+                logger.warning("Pass 1 attempt %d: %s", attempt + 1, e)
+
+        raise ValueError(f"Pass 1 failed after {1 + max_retries} attempts: {last_error}")
+
+    def _run_verify_pass(self, verify_prompt: str) -> "AgentResult":
+        """Run Pass 2 (verify) — short agent loop with full history.
+
+        If Pass 2 fails, falls back to using Pass 1 candidates as unverified findings.
+        """
+        verify_system_prompt = (
+            "You are verifying candidate code review findings. "
+            "For each candidate with needs_verification=true, use tool calls to check full file context. "
+            "Confirm, refine, or drop each candidate. Add concrete suggestion code blocks. "
+            f"You have {getattr(self.settings, 'verify_pass_max_turns', 10)} turns. "
+            "Reserve the last 2 for output."
+        )
+
+        source_commit = self.config.source_commit_id
+        target_commit = self.config.target_commit_id
+
+        runner = OpenAIAgentRunner(
+            settings=self.settings,
+            workspace=self.config.workspace,
+            model=self.config.model,
+            pr_id=self.config.pr_id,
+            repo=self.config.repo,
+            graph_store=self.config.pre_built_graph,
+            changed_files=[c.file for c in getattr(self, "_scan_candidates", [])],
+            source_commit_id=source_commit,
+            target_commit_id=target_commit,
+        )
+
+        max_turns = getattr(self.settings, "verify_pass_max_turns", 10)
+        result = runner.run(verify_prompt, max_turns=max_turns, use_sliding_window=False)
+
+        if result.findings_data is None and hasattr(self, "_scan_candidates"):
+            logger.warning("Pass 2 failed to produce findings — using Pass 1 candidates as fallback")
+            result.findings_data = self._candidates_to_findings()
+
+        return result
+
+    def _candidates_to_findings(self) -> dict:
+        """Convert Pass 1 candidates to findings format as a fallback."""
+        findings = []
+        for i, c in enumerate(getattr(self, "_scan_candidates", []), 1):
+            findings.append({
+                "id": f"cr-{i:03d}",
+                "file": c.file,
+                "line": c.line,
+                "severity": c.severity,
+                "category": c.category,
+                "title": c.title,
+                "message": c.message + " (unverified — Pass 2 fallback)",
+                "confidence": 0.6 if c.needs_verification else 0.75,
+            })
+        return {
+            "pr_id": self.config.pr_id,
+            "repo": self.config.repo,
+            "vcs": self.config.vcs,
+            "review_modes": ["standard"],
+            "findings": findings,
+            "files_clean": getattr(self, "_scan_files_clean", []),
+            "fix_verifications": [],
+        }
 
     def _build_changed_files_section(self, file_changes, skipped_count: int = 0) -> str:
         """Build the pre-fetched PR data section to append to the prompt."""

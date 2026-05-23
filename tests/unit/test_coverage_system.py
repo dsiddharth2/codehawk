@@ -309,8 +309,8 @@ class TestCoveragePenalty:
 # ---------------------------------------------------------------------------
 
 class TestConfigDefaults:
-    def test_batch_max_turns_default_is_40(self):
-        """PLAN requirement: batch_max_turns must default to 40, not 15."""
+    def test_batch_max_turns_default_is_10(self):
+        """Two-pass architecture: batch_max_turns defaults to 10 (Pass 2 verify budget)."""
         import importlib
         import sys
         # Import config with a clean settings instance
@@ -322,8 +322,8 @@ class TestConfigDefaults:
                 azure_devops_project="test",
                 azure_devops_repo="test",
             )
-            assert s.batch_max_turns == 40, (
-                f"batch_max_turns default should be 40, got {s.batch_max_turns}"
+            assert s.batch_max_turns == 10, (
+                f"batch_max_turns default should be 10, got {s.batch_max_turns}"
             )
 
     def test_coverage_gate_mode_default_is_hard(self):

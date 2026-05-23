@@ -247,3 +247,17 @@ class FindingsFile:
     tool_calls: int = 0
     agent: Optional[str] = None      # "codex" | "claude" | "gemini"
     usage: Optional[Usage] = None
+
+
+@dataclass
+class ScanCandidate:
+    """A candidate finding from Pass 1 (scan). May need verification in Pass 2."""
+    file: str
+    line: int
+    category: str
+    severity: str
+    title: str
+    message: str
+    needs_verification: bool = False
+    verification_hint: Optional[str] = None
+    checklist_source: Optional[str] = None
