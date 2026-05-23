@@ -71,7 +71,7 @@ class Settings(BaseSettings):
 
     # Review Configuration
     min_confidence_score: float = Field(
-        default=0.7,
+        default=0.5,
         ge=0.0,
         le=1.0,
         description="Minimum confidence score to post findings"
@@ -111,27 +111,65 @@ class Settings(BaseSettings):
         description="Comma-separated list of file extensions to skip during review"
     )
     smart_diff_threshold_kb: int = Field(
-        default=30,
+        default=15,
         ge=1,
         le=500,
         description="Diff size threshold in KB above which smart summarization is used"
     )
     batch_size: int = Field(
-        default=25,
+        default=10,
         ge=5,
         le=100,
         description="Number of code files per review batch"
     )
     batch_max_turns: int = Field(
-        default=15,
+        default=10,
         ge=5,
         le=100,
-        description="Maximum agent turns per batch review session"
+        description="Maximum agent turns per batch review session (used by single-pass fallback and Pass 2 verify)"
     )
     max_total_findings: int = Field(
         default=50,
         description="Maximum total findings to post across all files"
     )
+
+    # Coverage gate configuration
+    coverage_gate_mode: str = Field(
+        default="hard",
+        description="Coverage gate mode: 'hard' (default) fails gate on incomplete coverage; 'log' logs only (debugging/emergency use)"
+    )
+
+    # Risk classifier thresholds (configurable to avoid code changes during tuning)
+    risk_high_threshold: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description="File risk score >= this threshold is classified HIGH"
+    )
+    risk_medium_threshold: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="File risk score >= this threshold is classified MEDIUM (below = LOW)"
+    )
+    # Two-pass review configuration
+    two_pass_enabled: bool = Field(
+        default=True,
+        description="Enable two-pass review (Pass 1: scan, Pass 2: verify). When False, uses single-pass agent loop."
+    )
+    scan_pass_max_retries: int = Field(
+        default=1,
+        ge=0,
+        le=3,
+        description="Max retries for Pass 1 JSON parsing failures before falling back to single-pass"
+    )
+    verify_pass_max_turns: int = Field(
+        default=7,
+        ge=5,
+        le=40,
+        description="Max agent turns for Pass 2 (verify) — shorter than single-pass since candidates are pre-identified"
+    )
+
     max_per_file_findings: int = Field(
         default=5,
         description="Maximum findings to post per file"
@@ -167,6 +205,26 @@ class Settings(BaseSettings):
     penalty_documentation_critical: float = Field(default=0.0, ge=0.0, le=100.0)
     penalty_documentation_warning: float = Field(default=0.0, ge=0.0, le=100.0)
     penalty_documentation_suggestion: float = Field(default=0.0, ge=0.0, le=100.0)
+
+    # Architecture Issue Penalties
+    penalty_architecture_critical: float = Field(default=2.0, ge=0.0, le=100.0)
+    penalty_architecture_warning: float = Field(default=1.0, ge=0.0, le=100.0)
+    penalty_architecture_suggestion: float = Field(default=0.5, ge=0.0, le=100.0)
+
+    # Correctness Issue Penalties
+    penalty_correctness_critical: float = Field(default=2.0, ge=0.0, le=100.0)
+    penalty_correctness_warning: float = Field(default=1.0, ge=0.0, le=100.0)
+    penalty_correctness_suggestion: float = Field(default=0.5, ge=0.0, le=100.0)
+
+    # Error Handling Issue Penalties
+    penalty_error_handling_critical: float = Field(default=1.5, ge=0.0, le=100.0)
+    penalty_error_handling_warning: float = Field(default=0.75, ge=0.0, le=100.0)
+    penalty_error_handling_suggestion: float = Field(default=0.25, ge=0.0, le=100.0)
+
+    # Testing Issue Penalties (0 = informational only)
+    penalty_testing_critical: float = Field(default=0.0, ge=0.0, le=100.0)
+    penalty_testing_warning: float = Field(default=0.0, ge=0.0, le=100.0)
+    penalty_testing_suggestion: float = Field(default=0.0, ge=0.0, le=100.0)
 
     # Star Rating Thresholds (penalty points)
     penalty_threshold_5_stars: float = Field(default=0.0, ge=0.0, le=1000.0)
@@ -249,7 +307,31 @@ class Settings(BaseSettings):
                 'warning': self.penalty_documentation_warning,
                 'suggestion': self.penalty_documentation_suggestion,
                 'good': 0.0
-            }
+            },
+            'architecture': {
+                'critical': self.penalty_architecture_critical,
+                'warning': self.penalty_architecture_warning,
+                'suggestion': self.penalty_architecture_suggestion,
+                'good': 0.0
+            },
+            'correctness': {
+                'critical': self.penalty_correctness_critical,
+                'warning': self.penalty_correctness_warning,
+                'suggestion': self.penalty_correctness_suggestion,
+                'good': 0.0
+            },
+            'error_handling': {
+                'critical': self.penalty_error_handling_critical,
+                'warning': self.penalty_error_handling_warning,
+                'suggestion': self.penalty_error_handling_suggestion,
+                'good': 0.0
+            },
+            'testing': {
+                'critical': self.penalty_testing_critical,
+                'warning': self.penalty_testing_warning,
+                'suggestion': self.penalty_testing_suggestion,
+                'good': 0.0
+            },
         }
 
     def get_star_thresholds(self) -> List[float]:

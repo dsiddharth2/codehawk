@@ -349,12 +349,12 @@ class TestDryRunEndToEnd:
         assert len(output["fix_verifications"]) == 2
         assert output["fix_verifications"][0]["status"] == "fixed"
 
-    def test_schema_validation_error_raises_system_exit(self, tmp_path):
+    def test_schema_validation_warns_but_continues(self, tmp_path):
         bad_data = {"pr_id": 1}  # missing required fields
         path = tmp_path / "bad.json"
         path.write_text(json.dumps(bad_data))
-        with pytest.raises(SystemExit):
-            pf.run(findings_path=str(path), dry_run=True, workspace=str(tmp_path))
+        output = pf.run(findings_path=str(path), dry_run=True, workspace=str(tmp_path))
+        assert output["filtering"]["total_raw"] == 0
 
 
 # ---------------------------------------------------------------------------

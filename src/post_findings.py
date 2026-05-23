@@ -13,21 +13,26 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
+import logging
 import os
 import subprocess
 import sys
 from collections import defaultdict
-from dataclasses import asdict
+from dataclasses import asdict, replace as dc_replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+logger = logging.getLogger("codehawk.post_findings")
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 SCHEMA_PATH = Path(__file__).parent.parent / "commands" / "findings-schema.json"
-MIN_CONFIDENCE = 0.7
+MIN_CONFIDENCE = 0.5
 MAX_TOTAL_FINDINGS = 50  # Default; overridden by settings.max_total_findings at runtime
 MAX_PER_FILE = 5  # Default; overridden by settings.max_per_file_findings at runtime
 CODEREVIEW_YML = ".codereview.yml"
@@ -125,25 +130,101 @@ def _gh_run_with_retry(cmd, max_retries: int = 3, base_delay: float = 1.0, **kwa
     raise last_exc  # type: ignore[misc]
 
 
-VALID_CATEGORIES = {"security", "performance", "best_practices", "code_style", "documentation"}
+VALID_CATEGORIES = {
+    "security", "performance", "best_practices", "code_style",
+    "documentation", "testing", "architecture", "correctness", "error_handling"
+}
 CATEGORY_REMAP = {
-    "architecture": "best_practices",
     "reliability": "best_practices",
     "maintainability": "best_practices",
-    "error_handling": "best_practices",
-    "testing": "best_practices",
-    "correctness": "best_practices",
     "naming": "code_style",
     "formatting": "code_style",
 }
 
+VALID_SEVERITIES = {"critical", "warning", "suggestion"}
+SEVERITY_REMAP = {
+    "major": "warning",
+    "minor": "suggestion",
+    "error": "critical",
+    "high": "critical",
+    "medium": "warning",
+    "low": "suggestion",
+    "info": "suggestion",
+    "blocker": "critical",
+}
+
+
+_VALID_FINDING_KEYS = {"id", "file", "line", "severity", "category", "title", "message", "confidence", "suggestion"}
+
 
 def _normalize_findings(data: dict) -> None:
-    """Remap agent-invented categories to valid schema values in-place."""
-    for f in data.get("findings", []):
-        cat = f.get("category", "")
+    """Defensive normalization — treat model output as untrusted input.
+
+    Guarantees every finding has all required fields with correct types.
+    Coerces, defaults, and logs rather than crashing.
+    """
+    if not isinstance(data.get("findings"), list):
+        data["findings"] = []
+    if not isinstance(data.get("fix_verifications"), list):
+        data["fix_verifications"] = []
+
+    valid_findings = []
+    for i, f in enumerate(data["findings"]):
+        if not isinstance(f, dict):
+            logger.warning("findings[%d] is not a dict — skipping", i)
+            continue
+
+        f.setdefault("id", f"cr-{i + 1:03d}")
+        f.setdefault("file", "unknown")
+        f.setdefault("title", "")
+        f.setdefault("message", f.get("title", ""))
+        f.setdefault("severity", "warning")
+        f.setdefault("category", "best_practices")
+        f.setdefault("confidence", 0.7)
+
+        if not f["title"] and f["message"]:
+            f["title"] = (f["message"][:80] + "...") if len(f["message"]) > 80 else f["message"]
+
+        if not isinstance(f.get("line"), (int, float)):
+            try:
+                f["line"] = int(f.get("line", 0))
+            except (TypeError, ValueError):
+                f["line"] = 0
+
+        if not isinstance(f.get("confidence"), (int, float)):
+            try:
+                f["confidence"] = float(f.get("confidence", 0.7))
+            except (TypeError, ValueError):
+                f["confidence"] = 0.7
+        f["confidence"] = max(0.0, min(1.0, float(f["confidence"])))
+
+        cat = f["category"]
         if cat not in VALID_CATEGORIES:
             f["category"] = CATEGORY_REMAP.get(cat, "best_practices")
+
+        sev = f["severity"]
+        if sev not in VALID_SEVERITIES:
+            original = sev
+            f["severity"] = SEVERITY_REMAP.get(str(sev).lower(), "warning")
+            logger.warning("Remapped invalid severity %r → %r for %s", original, f["severity"], f.get("id"))
+
+        extra = set(f.keys()) - _VALID_FINDING_KEYS
+        for k in extra:
+            del f[k]
+
+        valid_findings.append(f)
+
+    data["findings"] = valid_findings
+
+    valid_fv = []
+    for i, fv in enumerate(data["fix_verifications"]):
+        if not isinstance(fv, dict):
+            continue
+        fv.setdefault("cr_id", f"unknown-{i}")
+        fv.setdefault("status", "not_relevant")
+        fv.setdefault("reason", "")
+        valid_fv.append(fv)
+    data["fix_verifications"] = valid_fv
 
 
 def _validate_schema(data: dict) -> List[str]:
@@ -183,48 +264,56 @@ def _parse_findings_file(data: dict):
     """
     from models.review_models import Finding, FindingsFile, FixVerification, Usage
 
-    findings = [
-        Finding(
-            id=f["id"],
-            file=f["file"],
-            line=f["line"],
-            severity=f["severity"],
-            category=f["category"],
-            title=f["title"],
-            message=f["message"],
-            confidence=f["confidence"],
-            suggestion=f.get("suggestion"),
-        )
-        for f in data.get("findings", [])
-    ]
+    findings = []
+    for f in data.get("findings", []):
+        try:
+            findings.append(Finding(
+                id=f.get("id", "cr-???"),
+                file=f.get("file", "unknown"),
+                line=int(f.get("line", 0)),
+                severity=f.get("severity", "warning"),
+                category=f.get("category", "best_practices"),
+                title=f.get("title", ""),
+                message=f.get("message", ""),
+                confidence=float(f.get("confidence", 0.7)),
+                suggestion=f.get("suggestion"),
+            ))
+        except Exception as exc:
+            logger.warning("Skipping unparseable finding %s: %s", f.get("id", "?"), exc)
 
-    fix_verifications = [
-        FixVerification(
-            cr_id=fv["cr_id"],
-            status=fv["status"],
-            reason=fv["reason"],
-        )
-        for fv in data.get("fix_verifications", [])
-    ]
+    fix_verifications = []
+    for fv in data.get("fix_verifications", []):
+        try:
+            fix_verifications.append(FixVerification(
+                cr_id=fv.get("cr_id", "unknown"),
+                status=fv.get("status", "not_relevant"),
+                reason=fv.get("reason", ""),
+            ))
+        except Exception as exc:
+            logger.warning("Skipping unparseable fix_verification: %s", exc)
 
     usage = None
     raw_usage = data.get("usage")
     if raw_usage and isinstance(raw_usage, dict):
-        usage = Usage(
-            input_tokens=raw_usage["input_tokens"],
-            output_tokens=raw_usage["output_tokens"],
-            total_tokens=raw_usage["total_tokens"],
-            model=raw_usage.get("model"),
-            duration_seconds=raw_usage.get("duration_seconds"),
-        )
+        try:
+            usage = Usage(
+                input_tokens=int(raw_usage.get("input_tokens", 0)),
+                output_tokens=int(raw_usage.get("output_tokens", 0)),
+                total_tokens=int(raw_usage.get("total_tokens", 0)),
+                model=raw_usage.get("model"),
+                duration_seconds=raw_usage.get("duration_seconds"),
+            )
+        except Exception as exc:
+            logger.warning("Failed to parse usage data: %s", exc)
 
     return FindingsFile(
-        pr_id=data["pr_id"],
-        repo=data["repo"],
-        vcs=data["vcs"],
+        pr_id=data.get("pr_id", 0),
+        repo=data.get("repo", ""),
+        vcs=data.get("vcs", "ado"),
         review_modes=data.get("review_modes", []),
         summary=data.get("summary"),
         findings=findings,
+        files_clean=data.get("files_clean", []),
         fix_verifications=fix_verifications,
         tool_calls=data.get("tool_calls", 0),
         agent=data.get("agent"),
@@ -264,6 +353,65 @@ def cap_findings(findings, max_total: int = MAX_TOTAL_FINDINGS, max_per_file: in
         capped.append(f)
 
     return capped
+
+
+def merge_similar_findings(findings):
+    """
+    Merge near-duplicate findings on the same file and nearby lines.
+
+    Merge criteria (ALL must match):
+    - Same file path
+    - Line numbers within +/- 5 of each other
+    - Title + message similarity > 0.7 (difflib.SequenceMatcher)
+
+    Keep the finding with higher severity. Append the merged finding's message
+    as a footnote: "(Also flagged at line {n}: {merged_title})".
+    """
+    if not findings:
+        return findings
+
+    severity_order = {"critical": 0, "warning": 1, "suggestion": 2}
+
+    def _similarity(a, b):
+        text_a = f"{a.title} {a.message}"
+        text_b = f"{b.title} {b.message}"
+        return difflib.SequenceMatcher(None, text_a, text_b).ratio()
+
+    by_file: Dict[str, list] = defaultdict(list)
+    for f in findings:
+        by_file[f.file].append(f)
+
+    result = []
+    for _, file_findings in by_file.items():
+        sorted_findings = sorted(file_findings, key=lambda f: f.line)
+        merged_flags = [False] * len(sorted_findings)
+
+        for i, fi in enumerate(sorted_findings):
+            if merged_flags[i]:
+                continue
+            current = fi
+            anchor_line = fi.line
+            for j in range(i + 1, len(sorted_findings)):
+                if merged_flags[j]:
+                    continue
+                fj = sorted_findings[j]
+                if abs(fj.line - anchor_line) > 5:
+                    break  # sorted by line; no more candidates within range
+                if _similarity(current, fj) > 0.7:
+                    merged_flags[j] = True
+                    fi_rank = severity_order.get(current.severity, 9)
+                    fj_rank = severity_order.get(fj.severity, 9)
+                    if fj_rank < fi_rank:
+                        # fj has higher severity — make it the keeper
+                        new_message = fj.message + f"\n\n*(Also flagged at line {current.line}: {current.title})*"
+                        current = dc_replace(fj, message=new_message)
+                    else:
+                        # current has higher or equal severity — keep it
+                        new_message = current.message + f"\n\n*(Also flagged at line {fj.line}: {fj.title})*"
+                        current = dc_replace(current, message=new_message)
+            result.append(current)
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -530,6 +678,16 @@ def _generate_comparison_md(score, fix_verifications, pr_id: int) -> str:
 # Summary formatting
 # ---------------------------------------------------------------------------
 
+def _coverage_display(files_reviewed: int, total_code_files: int) -> str:
+    """Return a human-readable coverage string like '8 / 12 (67%) — 4 files not reviewed'."""
+    if total_code_files <= 0 or total_code_files == files_reviewed:
+        pct = 100 if total_code_files <= 0 else int(files_reviewed / total_code_files * 100)
+        return f"{files_reviewed} / {max(files_reviewed, total_code_files)} ({pct}%)"
+    pct = int(files_reviewed / total_code_files * 100)
+    not_reviewed = total_code_files - files_reviewed
+    return f"{files_reviewed} / {total_code_files} ({pct}%) — {not_reviewed} file(s) not reviewed"
+
+
 def _build_summary_markdown(
     findings_file,
     filtered_findings: list,
@@ -543,6 +701,7 @@ def _build_summary_markdown(
     pr_details=None,
     files_reviewed: int = 0,
     files_skipped: int = 0,
+    total_code_files: int = 0,
 ) -> str:
     severity_counts = {"critical": 0, "warning": 0, "suggestion": 0}
     category_counts = {"security": 0, "performance": 0, "best_practices": 0, "code_style": 0, "documentation": 0}
@@ -625,7 +784,7 @@ def _build_summary_markdown(
         lines += [
             "",
             "### 📊 Review Statistics",
-            f"- ✅ Files Reviewed: {files_reviewed}",
+            f"- ✅ Files Reviewed: {_coverage_display(files_reviewed, total_code_files)}",
             f"- ⏭️ Files Skipped: {files_skipped}",
             f"- ❌ Files Failed: 0",
             f"- 💬 Total Comments: {len(filtered_findings)}",
@@ -748,7 +907,14 @@ def _build_summary_markdown(
 # CI gate
 # ---------------------------------------------------------------------------
 
-def _evaluate_gate(score, filtered_findings: list, gate_config: Dict[str, Any]) -> Dict[str, Any]:
+def _evaluate_gate(
+    score,
+    filtered_findings: list,
+    gate_config: Dict[str, Any],
+    coverage_ratio: float = 1.0,
+    not_reviewed_files: Optional[List[str]] = None,
+    coverage_gate_mode: str = "hard",
+) -> Dict[str, Any]:
     """
     Evaluate CI gate conditions against .codereview.yml thresholds.
 
@@ -775,7 +941,161 @@ def _evaluate_gate(score, filtered_findings: list, gate_config: Dict[str, Any]) 
                 f"Gate failed: star rating {actual_stars} below minimum {min_stars}"
             )
 
+    # Coverage gate (controlled by coverage_gate_mode)
+    if coverage_ratio < 1.0:
+        n = len(not_reviewed_files) if not_reviewed_files else 0
+        file_list = ", ".join(not_reviewed_files[:5]) if not_reviewed_files else "unknown"
+        if n > 5:
+            file_list += f", ... ({n - 5} more)"
+        msg = f"Gate failed: {n} file(s) not reviewed ({file_list}). 100% code review coverage is required."
+        if coverage_gate_mode == "hard":
+            passed = False
+            reasons.append(msg)
+        else:
+            # "log" mode: report as a warning but don't fail
+            reasons.append(f"Coverage warning ({coverage_ratio:.0%}): {msg}")
+
     return {"passed": passed, "reasons": reasons}
+
+
+# ---------------------------------------------------------------------------
+# Audit trail export
+# ---------------------------------------------------------------------------
+
+def _write_audit_trail(
+    workspace: str,
+    findings_file,
+    all_raw_findings: list,
+    capped_findings: list,
+    score,
+    gate_result: Dict[str, Any],
+    files_reviewed_set: set,
+    all_code_paths: set,
+    coverage_ratio: float,
+    usage=None,
+    cost_estimate: Optional[Dict[str, Any]] = None,
+    pr_details=None,
+    risk_table_md: str = "",
+) -> Optional[str]:
+    """Write a timestamped audit trail markdown file to .cr/ in the workspace."""
+    cr_dir = Path(workspace) / ".cr"
+    cr_dir.mkdir(parents=True, exist_ok=True)
+
+    pr_id = findings_file.pr_id
+    now = datetime.now()
+    export_path = cr_dir / f"review_{pr_id}_{now:%Y%m%d_%H%M%S}.md"
+
+    lines = [
+        f"# Code Review Audit Trail — PR #{pr_id}",
+        "",
+        f"**Generated:** {now:%Y-%m-%d %H:%M:%S}",
+        "",
+        "---",
+        "",
+        "## PR Metadata",
+        "",
+        f"- **PR ID:** {pr_id}",
+        f"- **Repo:** {findings_file.repo}",
+        f"- **VCS:** {findings_file.vcs}",
+        f"- **Review Modes:** {', '.join(findings_file.review_modes)}",
+    ]
+
+    if pr_details:
+        lines += [
+            f"- **Branch:** `{getattr(pr_details, 'source_branch', 'N/A')}` → `{getattr(pr_details, 'target_branch', 'N/A')}`",
+            f"- **Author:** {getattr(pr_details, 'author', 'N/A')}",
+            f"- **Title:** {getattr(pr_details, 'title', 'N/A')}",
+        ]
+
+    lines += ["", "---", "", "## Score Breakdown", ""]
+
+    if score:
+        lines += [
+            f"- **Overall Rating:** {score.overall_stars} ({score.quality_level})",
+            f"- **Total Penalty:** {score.total_penalty:.1f} points",
+            "",
+            "### Category Penalties",
+            "",
+            "| Category | Penalty |",
+            "|----------|---------|",
+        ]
+        for cat, penalty in sorted(score.category_penalties.items()):
+            lines.append(f"| {cat} | {penalty:.1f} |")
+    else:
+        lines.append("*(Score not available)*")
+
+    not_reviewed = sorted(all_code_paths - files_reviewed_set)
+    lines += [
+        "", "---", "", "## Files Reviewed", "",
+        f"- **Reviewed:** {_coverage_display(len(files_reviewed_set), len(all_code_paths))}",
+        f"- **Coverage:** {coverage_ratio:.1%}",
+    ]
+    if not_reviewed:
+        lines += ["", "### Files Not Reviewed", ""]
+        for fp in not_reviewed:
+            lines.append(f"- `{fp}`")
+
+    lines += ["", "---", "", "## Findings", "",
+              f"*(Total raw: {len(all_raw_findings)}, After filtering/capping: {len(capped_findings)})*", ""]
+
+    if capped_findings:
+        lines += [
+            "| Severity | Category | File | Line | Title | Confidence |",
+            "|----------|----------|------|------|-------|------------|",
+        ]
+        for f in capped_findings:
+            lines.append(f"| {f.severity} | {f.category} | `{f.file}` | {f.line} | {f.title} | {f.confidence:.0%} |")
+    else:
+        lines.append("*(No findings after filtering)*")
+
+    capped_ids = {f.id for f in capped_findings}
+    filtered_out = [f for f in all_raw_findings if f.id not in capped_ids]
+    if filtered_out:
+        lines += [
+            "", "### Filtered/Capped Findings (not posted)", "",
+            "| Severity | Category | File | Line | Title | Confidence |",
+            "|----------|----------|------|------|-------|------------|",
+        ]
+        for f in filtered_out:
+            lines.append(f"| {f.severity} | {f.category} | `{f.file}` | {f.line} | {f.title} | {f.confidence:.0%} |")
+
+    lines += ["", "---", "", "## Token Usage", ""]
+    if usage:
+        lines += [
+            f"- **Model:** {usage.model or 'unknown'}",
+            f"- **Input tokens:** {usage.input_tokens:,}",
+            f"- **Output tokens:** {usage.output_tokens:,}",
+            f"- **Total tokens:** {usage.total_tokens:,}",
+        ]
+        if usage.duration_seconds is not None:
+            lines.append(f"- **Duration:** {usage.duration_seconds:.1f}s")
+        if cost_estimate and cost_estimate.get("total_cost_usd") is not None:
+            lines.append(f"- **Estimated cost:** ${cost_estimate['total_cost_usd']:.4f}")
+    else:
+        lines.append("*(Usage not available)*")
+
+    lines += ["", "---", "", "## Risk Classification", ""]
+    if risk_table_md:
+        lines.append(risk_table_md)
+    else:
+        lines.append("*(Risk classification not available for this review)*")
+
+    lines += ["", "---", "", "## Gate Decision", ""]
+    gate_passed = gate_result.get("passed", True)
+    lines.append(f"**Result:** {'PASSED ✅' if gate_passed else 'FAILED 🚨'}")
+    if gate_result.get("reasons"):
+        lines += ["", "**Reasons:**", ""]
+        for reason in gate_result["reasons"]:
+            lines.append(f"- {reason}")
+    lines.append("")
+
+    content = "\n".join(lines)
+    try:
+        export_path.write_text(content, encoding="utf-8")
+        return str(export_path)
+    except Exception as exc:
+        _eprint(f"Warning: failed to write audit trail: {exc}")
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -805,12 +1125,13 @@ def run(
     _normalize_findings(raw)
     errors = _validate_schema(raw)
     if errors:
-        _eprint("ERROR: findings.json failed schema validation:")
+        logger.warning("findings.json has schema issues (continuing with best-effort):")
         for e in errors:
-            _eprint(f"  - {e}")
-        raise SystemExit(1)
+            logger.warning("  - %s", e)
 
     findings_file = _parse_findings_file(raw)
+    # Track whether agent explicitly included files_clean (opted into coverage tracking)
+    agent_uses_coverage_tracking = "files_clean" in raw
 
     # 2. Detect verify-only mode
     is_verify_only = "verify_fixes" in findings_file.review_modes and not findings_file.findings
@@ -822,6 +1143,10 @@ def run(
     else:
         after_confidence = filter_by_confidence(findings_file.findings, MIN_CONFIDENCE)
         filtered_count = len(findings_file.findings) - len(after_confidence)
+
+    # 3b. Merge near-duplicate findings (skip for verify-only)
+    if not is_verify_only:
+        after_confidence = merge_similar_findings(after_confidence)
 
     # 4. Apply mode multipliers (adjusts severity for scoring)
     from pr_scorer import PRScorer
@@ -837,8 +1162,12 @@ def run(
             "security": {"critical": 5.0, "warning": 4.0, "suggestion": 2.0, "good": 0.0},
             "performance": {"critical": 3.0, "warning": 2.0, "suggestion": 1.0, "good": 0.0},
             "best_practices": {"critical": 2.0, "warning": 1.0, "suggestion": 0.5, "good": 0.0},
+            "architecture": {"critical": 2.0, "warning": 1.0, "suggestion": 0.5, "good": 0.0},
+            "correctness": {"critical": 2.0, "warning": 1.0, "suggestion": 0.5, "good": 0.0},
+            "error_handling": {"critical": 1.5, "warning": 0.75, "suggestion": 0.25, "good": 0.0},
             "code_style": {"critical": 0.0, "warning": 0.0, "suggestion": 0.0, "good": 0.0},
             "documentation": {"critical": 0.0, "warning": 0.0, "suggestion": 0.0, "good": 0.0},
+            "testing": {"critical": 0.0, "warning": 0.0, "suggestion": 0.0, "good": 0.0},
         }
         star_thresholds = [0.0, 5.0, 15.0, 30.0, 50.0]
         settings = None
@@ -892,24 +1221,8 @@ def run(
         else:
             _handle_fix_verifications_github(findings_file.fix_verifications, pr_id, repo, dry_run)
 
-    # 11. Gate evaluation from .codereview.yml (verify-only always passes — no new findings)
-    gate_config = _load_codereview_yml(workspace)
-    if is_verify_only:
-        gate_result = {"passed": True, "reasons": []}
-    else:
-        gate_result = _evaluate_gate(score, all_adjusted, gate_config)
-
-    # 11. Generate score comparison markdown when fix verifications are present
-    comparison_md = ""
-    if findings_file.fix_verifications:
-        comparison_md = _generate_comparison_md(score, findings_file.fix_verifications, pr_id)
-
-    # 12. Estimate cost from usage
-    cost_estimate = _estimate_cost(findings_file.usage)
-
-    # 12b. Fetch PR details for summary (title, author, branch)
+    # 11a. Fetch PR details for summary + coverage (title, author, branch)
     pr_details = None
-    files_reviewed = len(set(f.file for f in findings_file.findings))
     files_skipped = 0
     if vcs == "ado" and settings:
         try:
@@ -917,9 +1230,60 @@ def run(
             from models.review_models import FetchPRDetailsInput
             pr_activity = FetchPRDetailsActivity(settings=settings)
             pr_details = pr_activity.execute(FetchPRDetailsInput(pr_id=pr_id, repository_id=repo))
-            files_reviewed = len(pr_details.file_changes) if pr_details.file_changes else files_reviewed
         except Exception:
             pass
+
+    # 11b. Compute coverage
+    files_with_findings = set(f.file for f in findings_file.findings)
+    files_clean_set = set(findings_file.files_clean or [])
+    files_reviewed_set = files_with_findings | files_clean_set
+
+    from file_filter import parse_skip_extensions, filter_changed_files
+    skip_exts_str = settings.skip_extensions if settings else ""
+    skip_exts = parse_skip_extensions(skip_exts_str) if skip_exts_str else set()
+    if pr_details and pr_details.file_changes:
+        code_files, _ = filter_changed_files(pr_details.file_changes, skip_exts)
+        total_code_files = len(code_files)
+        all_code_paths = {fc.path for fc in code_files}
+    else:
+        total_code_files = len(files_reviewed_set) or 1
+        all_code_paths = files_reviewed_set.copy()
+
+    not_reviewed_files = sorted(all_code_paths - files_reviewed_set)
+    files_reviewed = len(files_reviewed_set)
+    # Coverage gate only fires when the agent explicitly included files_clean[] in the output,
+    # signalling that it has opted into coverage tracking. Old-style findings.json without
+    # this key get no coverage gate (backward compatible).
+    if agent_uses_coverage_tracking and total_code_files > 0:
+        coverage_ratio = len(files_reviewed_set) / total_code_files
+    else:
+        coverage_ratio = 1.0
+    coverage_gate_mode = getattr(settings, "coverage_gate_mode", "hard") if settings else "hard"
+
+    # 11c. Apply coverage penalty to score (only when coverage tracking is active)
+    score = scorer.apply_coverage_penalty(score, coverage_ratio)
+
+    # 12. Gate evaluation from .codereview.yml (verify-only always passes — no new findings)
+    gate_config = _load_codereview_yml(workspace)
+    if is_verify_only:
+        gate_result = {"passed": True, "reasons": []}
+    else:
+        gate_result = _evaluate_gate(
+            score,
+            all_adjusted,
+            gate_config,
+            coverage_ratio=coverage_ratio,
+            not_reviewed_files=not_reviewed_files,
+            coverage_gate_mode=coverage_gate_mode,
+        )
+
+    # 12b. Generate score comparison markdown when fix verifications are present
+    comparison_md = ""
+    if findings_file.fix_verifications:
+        comparison_md = _generate_comparison_md(score, findings_file.fix_verifications, pr_id)
+
+    # 12c. Estimate cost from usage
+    cost_estimate = _estimate_cost(findings_file.usage)
 
     # 13. Post/update summary
     summary_md = _build_summary_markdown(
@@ -935,6 +1299,7 @@ def run(
         pr_details=pr_details,
         files_reviewed=files_reviewed,
         files_skipped=files_skipped,
+        total_code_files=total_code_files,
     )
 
     if not dry_run and settings:
@@ -955,6 +1320,22 @@ def run(
                 )
         except Exception as exc:
             _eprint(f"Warning: failed to post summary: {exc}")
+
+    # 13b. Write audit trail
+    _write_audit_trail(
+        workspace=workspace,
+        findings_file=findings_file,
+        all_raw_findings=findings_file.findings,
+        capped_findings=capped,
+        score=score,
+        gate_result=gate_result,
+        files_reviewed_set=files_reviewed_set,
+        all_code_paths=all_code_paths,
+        coverage_ratio=coverage_ratio,
+        usage=findings_file.usage,
+        cost_estimate=cost_estimate,
+        pr_details=pr_details,
+    )
 
     # Build output
     output = {

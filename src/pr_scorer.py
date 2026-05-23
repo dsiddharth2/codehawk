@@ -259,6 +259,26 @@ class PRScorer:
             'good': statistics.get('good', 0)
         }
 
+    def apply_coverage_penalty(self, score: PRScore, coverage_ratio: float) -> PRScore:
+        """
+        Add a coverage penalty to an existing PRScore.
+
+        For coverage below 100%, adds: (1 - coverage_ratio) * 50 penalty points.
+        This ensures incomplete reviews score poorly even when the gate mode is 'log'.
+
+        Args:
+            score: Existing PRScore to augment.
+            coverage_ratio: Fraction of code files reviewed (0.0–1.0).
+
+        Returns:
+            New PRScore with coverage penalty applied.
+        """
+        if coverage_ratio >= 1.0:
+            return score
+        penalty = round((1.0 - coverage_ratio) * 50.0, 1)
+        from dataclasses import replace
+        return replace(score, total_penalty=round(score.total_penalty + penalty, 1))
+
     def _create_disabled_score(self) -> PRScore:
         return PRScore(
             total_penalty=0.0,

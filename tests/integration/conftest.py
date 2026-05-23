@@ -27,21 +27,26 @@ logger = logging.getLogger("codehawk.test")
 # Constants
 # ---------------------------------------------------------------------------
 
-MAX_TURNS_INTEGRATION = 15  # cap agent turns — diffs and analysis are pre-injected
+MAX_TURNS_INTEGRATION = 40
 
 # Large PR
 #PR_ID = 6435
 #PR_ID = 6619
 
 #Small PR
-PR_ID = 6629
+#PR_ID = 6629
 # REPO = "BluSKYFunctionApps"
 # ADO_ORG = "blub0x"
 # ADO_PROJECT = "BluSKY Git"
 
-REPO = "AI Pipelines"
+#REPO = "AI Pipelines"
+#ADO_ORG = "blub0x"
+#ADO_PROJECT = "BluB0X AI"
+
+PR_ID = 6686
+REPO = "BluSKYFunctionApps"
 ADO_ORG = "blub0x"
-ADO_PROJECT = "BluB0X AI"
+ADO_PROJECT = "BluSKY Git"
 
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent

@@ -68,8 +68,8 @@
       "severity": "suggestion",
       "category": "best_practices",
       "title": "Low confidence finding — should be filtered",
-      "message": "This finding has confidence below 0.7 and should be excluded by the filter.",
-      "confidence": 0.65,
+      "message": "This finding has confidence below 0.5 and should be excluded by the filter.",
+      "confidence": 0.40,
       "suggestion": null
     }
   ],

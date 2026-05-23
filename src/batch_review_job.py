@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -118,12 +119,14 @@ class BatchReviewJob:
         batch_total = len(batches)
         logger.info("Splitting %d code files into %d batches", len(code_files), batch_total)
 
-        # --- Step 6: Run each batch ---
+        # --- Step 6: Run batches in parallel (max 3 concurrent workers) ---
         batch_results: List[Dict[str, Any]] = []
-        for i, batch_files in enumerate(batches, start=1):
-            logger.info("--- Batch %d/%d: %d files ---", i, batch_total, len(batch_files))
-            try:
-                result = self._run_batch(
+        max_workers = min(3, batch_total)
+        logger.info("Running %d batches with max %d parallel workers", batch_total, max_workers)
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {
+                pool.submit(
+                    self._run_batch_with_retry,
                     batch_files=batch_files,
                     batch_index=i,
                     batch_total=batch_total,
@@ -131,12 +134,19 @@ class BatchReviewJob:
                     source_commit_id=source_commit,
                     target_commit_id=target_commit,
                     previous_findings=previous_findings,
-                )
-                batch_results.append(result)
-                logger.info("Batch %d/%d completed: %d findings", i, batch_total,
-                            len(result.get("findings", [])))
-            except Exception as exc:
-                logger.error("Batch %d/%d failed: %s", i, batch_total, exc)
+                ): i
+                for i, batch_files in enumerate(batches, start=1)
+            }
+            for future in as_completed(futures):
+                batch_num = futures[future]
+                try:
+                    result = future.result()
+                    batch_results.append(result)
+                    logger.info("Batch %d/%d completed: %d findings", batch_num, batch_total,
+                                len(result.get("findings", [])))
+                except Exception as exc:
+                    logger.error("Batch %d/%d failed: %s", batch_num, batch_total, exc)
+                    # Failed batches don't crash the pipeline
                 # Failed batches don't crash the pipeline
 
         # --- Step 7: Merge findings ---
@@ -253,6 +263,55 @@ class BatchReviewJob:
         if findings_path.exists():
             return json.loads(findings_path.read_text(encoding="utf-8"))
         return {"findings": []}
+
+    def _run_batch_with_retry(
+        self,
+        batch_files: List,
+        batch_index: int,
+        batch_total: int,
+        graph_store: Any,
+        source_commit_id: str = "",
+        target_commit_id: str = "",
+        previous_findings: list | None = None,
+    ) -> Dict[str, Any]:
+        """Wrapper around _run_batch with exponential backoff retry on rate-limit errors.
+
+        Retries up to 3 times with delays of 1s, 2s, 4s.
+        A failure in one batch does not affect other batches.
+        """
+        delays = [1, 2, 4]
+        last_exc: Exception | None = None
+
+        for attempt, delay in enumerate(delays, start=1):
+            try:
+                return self._run_batch(
+                    batch_files=batch_files,
+                    batch_index=batch_index,
+                    batch_total=batch_total,
+                    graph_store=graph_store,
+                    source_commit_id=source_commit_id,
+                    target_commit_id=target_commit_id,
+                    previous_findings=previous_findings,
+                )
+            except Exception as exc:
+                last_exc = exc
+                exc_str = str(exc).lower()
+                is_rate_limit = (
+                    "429" in exc_str
+                    or "ratelimit" in exc_str
+                    or "too many requests" in exc_str
+                    or type(exc).__name__.lower() in ("ratelimiterror", "apierror")
+                )
+                if is_rate_limit and attempt <= len(delays):
+                    logger.warning(
+                        "Batch %d/%d rate-limited (attempt %d) — retrying in %ds",
+                        batch_index, batch_total, attempt, delay,
+                    )
+                    time.sleep(delay)
+                else:
+                    raise
+
+        raise last_exc  # exhausted retries
 
     @staticmethod
     def _split_into_batches(code_files: List, batch_size: int) -> List[List]:

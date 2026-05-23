@@ -36,6 +36,11 @@
         "$ref": "#/$defs/Finding"
       }
     },
+    "files_clean": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Files reviewed with no findings — every code file must appear in either findings[].file or files_clean[]"
+    },
     "fix_verifications": {
       "type": "array",
       "description": "Fix verification results from a re-push (optional)",
@@ -85,7 +90,7 @@
         },
         "category": {
           "type": "string",
-          "enum": ["security", "performance", "best_practices", "code_style", "documentation"],
+          "enum": ["security", "performance", "best_practices", "architecture", "correctness", "error_handling", "code_style", "documentation", "testing"],
           "description": "Finding category"
         },
         "title": {

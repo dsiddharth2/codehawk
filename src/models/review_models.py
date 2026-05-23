@@ -83,7 +83,7 @@ class ReviewComment:
     file_path: str
     line_number: Optional[int]
     severity: str  # 'critical', 'warning', 'suggestion', 'good'
-    category: str  # 'security', 'performance', 'best_practices', 'code_style', 'documentation'
+    category: str  # 'security', 'performance', 'best_practices', 'architecture', 'correctness', 'error_handling', 'code_style', 'documentation', 'testing'
     message: str
     suggestion: Optional[str] = None
     confidence: float = 0.8
@@ -208,7 +208,7 @@ class Finding:
     file: str                        # file path relative to repo root
     line: int                        # line number
     severity: str                    # "critical" | "warning" | "suggestion"
-    category: str                    # "security" | "performance" | "best_practices" | "code_style" | "documentation"
+    category: str                    # "security" | "performance" | "best_practices" | "architecture" | "correctness" | "error_handling" | "code_style" | "documentation" | "testing"
     title: str                       # short summary
     message: str                     # full description
     confidence: float                # 0.0 – 1.0
@@ -242,7 +242,22 @@ class FindingsFile:
     review_modes: List[str]          # e.g. ["standard", "security"]
     summary: Optional[str] = None
     findings: List[Finding] = field(default_factory=list)
+    files_clean: List[str] = field(default_factory=list)
     fix_verifications: List[FixVerification] = field(default_factory=list)
     tool_calls: int = 0
     agent: Optional[str] = None      # "codex" | "claude" | "gemini"
     usage: Optional[Usage] = None
+
+
+@dataclass
+class ScanCandidate:
+    """A candidate finding from Pass 1 (scan). May need verification in Pass 2."""
+    file: str
+    line: int
+    category: str
+    severity: str
+    title: str
+    message: str
+    needs_verification: bool = False
+    verification_hint: Optional[str] = None
+    checklist_source: Optional[str] = None

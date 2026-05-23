@@ -38,7 +38,7 @@ and included in the prompt below. Do NOT call `get_change_analysis` or `get_blas
 - Review ALL the diffs provided. Do not skip files.
 - Use `get_callers` or `get_dependents` ONLY when you need to verify a specific caller relationship.
 - Use `get_file_content` or `read_local_file` ONLY when you need full file context beyond the diff.
-- Minimize tool calls — most of your review should be based on the pre-injected context."""
+- Use the pre-injected context as your starting point, then verify findings with tool calls."""
         if has_graph
         else """\
 PRE-INJECTED CONTEXT:
@@ -46,7 +46,7 @@ PRE-INJECTED CONTEXT:
 - Review ALL the diffs provided. Do not skip files.
 - Use `get_file_content` or `read_local_file` ONLY when you need full file context beyond the diff.
 - Use `search_code` for structural queries.
-- Minimize tool calls — most of your review should be based on the pre-injected context."""
+- Use the pre-injected context as your starting point, then verify findings with tool calls."""
     )
 
     return f"""\
@@ -55,6 +55,14 @@ read files, search code, and run git blame.
 
 TURN BUDGET: You have {max_turns} turns total. Reserve the last 3 for producing findings JSON. \
 Do not waste turns on redundant tool calls.
+
+MULTI-TURN REVIEW PROCESS (MANDATORY):
+- Turn 1-2: Read through all pre-injected diffs. Identify candidate issues. Do NOT output findings yet.
+- Turn 3+: Use `read_local_file` or `get_file_content` to verify each candidate issue against full file context. \
+Use `get_callers`/`get_dependents` for blast radius on high-risk changes. You MUST make at least 3 tool calls \
+to verify findings before producing the final JSON.
+- Final turns: Output the findings JSON only after verification.
+Do NOT produce findings in a single turn. A thorough review requires verification via tool calls.
 
 {graph_strategy}
 
@@ -83,8 +91,7 @@ SMART DIFF DRILL-IN:
 TURN EFFICIENCY:
 - Do NOT read config files (.codereview.md, .codereview.yml, AGENTS.md) — they are pre-loaded in the prompt.
 - Do NOT call `get_file_diff`, `get_change_analysis`, `get_blast_radius`, or `get_pr` — all data is pre-injected.
-- Only use tool calls when you need information NOT in the prompt (e.g., full file context, caller relationships).
-- Your goal: review all pre-injected diffs and produce findings with ZERO or minimal tool calls.
+- You have 40 tool calls available. Use `read_local_file` or `get_file_content` when you need full-file context to verify a finding. Use `get_callers` to check blast radius on high-risk changes. The pre-injected diffs save you from fetching diffs — but reading full files for verification is expected and encouraged. Spend your turns where they matter most: verify before flagging, prioritize high-risk files, and ensure every file in your batch is covered.
 
 When you have completed your review, output the findings JSON as your final message. \
 Do NOT attempt to write files — just output the JSON directly in a ```json code fence. \
@@ -109,6 +116,45 @@ class AgentResult:
 
 
 RESPONSES_API_MODELS = {"gpt-5-codex", "codex-mini-latest"}
+
+SLIDING_WINDOW_SIZE = 3
+
+
+def _build_sliding_window_input(
+    original_prompt: str,
+    tool_history: list[dict],
+    findings_draft: list[dict],
+    window_size: int = SLIDING_WINDOW_SIZE,
+) -> list[dict]:
+    """Build input items for the Responses API using a sliding window over tool history.
+
+    Always includes the original prompt. Appends a findings draft summary if any
+    findings have been identified. Only includes the last `window_size` tool
+    call/response exchanges to cap per-turn token cost.
+    """
+    items: list[dict] = [{"type": "message", "role": "user", "content": original_prompt}]
+
+    if findings_draft:
+        draft_summary = json.dumps(
+            [{"id": f.get("id", "?"), "file": f.get("file", "?"), "title": f.get("title", "?")} for f in findings_draft],
+            indent=2,
+        )
+        items.append({
+            "type": "message",
+            "role": "user",
+            "content": (
+                f"Findings identified so far ({len(findings_draft)} issues):\n"
+                f"```json\n{draft_summary}\n```\n"
+                "Continue reviewing the remaining files. Do not re-flag these issues."
+            ),
+        })
+
+    recent = tool_history[-window_size:] if window_size > 0 else tool_history
+    for exchange in recent:
+        items.append(exchange["call"])
+        items.append(exchange["output"])
+
+    return items
 
 
 class OpenAIAgentRunner:
@@ -156,10 +202,71 @@ class OpenAIAgentRunner:
     def _use_responses_api(self) -> bool:
         return self.model in RESPONSES_API_MODELS
 
-    def run(self, prompt: str, max_turns: int = 40) -> AgentResult:
+    def run(self, prompt: str, max_turns: int = 40, use_sliding_window: bool = True) -> AgentResult:
         if self._use_responses_api:
-            return self._run_responses(prompt, max_turns)
+            return self._run_responses(prompt, max_turns, use_sliding_window=use_sliding_window)
         return self._run_chat_completions(prompt, max_turns)
+
+    def run_single_turn(self, system_prompt: str, user_prompt: str) -> AgentResult:
+        """Single-turn API call with no tools. Used for Pass 1 (scan)."""
+        result = AgentResult()
+        result.model = self.model
+        result.turns = 1
+        start_time = time.time()
+
+        try:
+            if self._use_responses_api:
+                kwargs = {
+                    "model": self.model,
+                    "instructions": system_prompt,
+                    "input": [{"type": "message", "role": "user", "content": user_prompt}],
+                }
+                if "codex" not in self.model:
+                    kwargs["temperature"] = 0.3
+                response = self.client.responses.create(**kwargs)
+
+                if response.usage:
+                    result.input_tokens = response.usage.input_tokens
+                    result.output_tokens = response.usage.output_tokens
+                    result.total_tokens = response.usage.input_tokens + response.usage.output_tokens
+
+                for item in response.output:
+                    if item.type == "message":
+                        for content in item.content:
+                            if hasattr(content, "text"):
+                                result.raw_final_message = content.text
+            else:
+                chat_kwargs = {
+                    "model": self.model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                }
+                if "codex" not in self.model:
+                    chat_kwargs["temperature"] = 0.3
+                    chat_kwargs["seed"] = 42
+                response = self.client.chat.completions.create(**chat_kwargs)
+
+                if response.usage:
+                    result.input_tokens = response.usage.prompt_tokens
+                    result.output_tokens = response.usage.completion_tokens
+                    result.total_tokens = response.usage.total_tokens
+
+                if response.choices and response.choices[0].message.content:
+                    result.raw_final_message = response.choices[0].message.content
+
+        except Exception as e:
+            logger.error("Single-turn API call failed: %s", e)
+            result.returncode = 1
+
+        result.duration_seconds = round(time.time() - start_time, 1)
+        logger.info(
+            "Single-turn complete: tokens=%s (in:%s out:%s), duration=%.1fs",
+            f"{result.total_tokens:,}", f"{result.input_tokens:,}", f"{result.output_tokens:,}",
+            result.duration_seconds,
+        )
+        return result
 
     # ------------------------------------------------------------------
     # Chat Completions API (gpt-4o-mini, gpt-4.1, o3, etc.)
@@ -193,11 +300,15 @@ class OpenAIAgentRunner:
                 logger.warning("DEADLINE INJECTION: turn %d, 3 turns remaining", turn + 1)
 
             try:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    tools=tool_defs,
-                )
+                chat_kwargs = {
+                    "model": self.model,
+                    "messages": messages,
+                    "tools": tool_defs,
+                }
+                if "codex" not in self.model:
+                    chat_kwargs["temperature"] = 0.3
+                    chat_kwargs["seed"] = 42
+                response = self.client.chat.completions.create(**chat_kwargs)
             except Exception as e:
                 logger.error("API call failed: %s", e)
                 result.returncode = 1
@@ -228,13 +339,34 @@ class OpenAIAgentRunner:
 
             messages.append(assistant_msg.model_dump())
 
-            if choice.finish_reason == "stop":
-                logger.info("Agent finished after %d turns", turn + 1)
-                break
-
-            if not assistant_msg.tool_calls:
-                logger.info("No tool calls, stopping at turn %d", turn + 1)
-                break
+            if choice.finish_reason == "stop" or not assistant_msg.tool_calls:
+                if result.raw_final_message and _extract_findings_json(result.raw_final_message):
+                    logger.info("Agent finished with findings after %d turns", turn + 1)
+                    break
+                remaining = max_turns - (turn + 1)
+                if remaining <= 0:
+                    logger.warning("No findings JSON and no turns left")
+                    break
+                if remaining <= 3:
+                    logger.warning("No findings JSON and only %d turns left — forcing output", remaining)
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "You have not produced findings JSON yet. You MUST output your "
+                            "```json findings block NOW with whatever findings you have. "
+                            "Do not make any more tool calls."
+                        ),
+                    })
+                else:
+                    logger.info("Text-only response at turn %d — nudging agent to continue", turn + 1)
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "Continue your review. Use tool calls to verify findings in the remaining files. "
+                            "Do not output findings JSON until you have reviewed all files in your batch."
+                        ),
+                    })
+                continue
 
             for tc in assistant_msg.tool_calls:
                 result.tool_calls_count += 1
@@ -297,7 +429,7 @@ class OpenAIAgentRunner:
     # Responses API (gpt-5-codex, codex-mini-latest, etc.)
     # ------------------------------------------------------------------
 
-    def _run_responses(self, prompt: str, max_turns: int = 40) -> AgentResult:
+    def _run_responses(self, prompt: str, max_turns: int = 40, use_sliding_window: bool = True) -> AgentResult:
         result = AgentResult()
         result.model = self.model
         start_time = time.time()
@@ -307,20 +439,27 @@ class OpenAIAgentRunner:
         logger.info("Agent started [Responses]: model=%s, max_turns=%d", self.model, max_turns)
         logger.info("Prompt length: %d chars", len(prompt))
 
-        input_items = [{"type": "message", "role": "user", "content": prompt}]
-        previous_response_id = None
         all_assistant_texts: list[str] = []
+        tool_history: list[dict] = []
+        findings_draft: list[dict] = []
 
         for turn in range(max_turns):
             result.turns = turn + 1
 
+            window_size = SLIDING_WINDOW_SIZE if use_sliding_window else 0
+            input_items = _build_sliding_window_input(
+                original_prompt=prompt,
+                tool_history=tool_history,
+                findings_draft=findings_draft,
+                window_size=window_size,
+            )
+
             if turn == max_turns - 3:
-                deadline_msg = (
+                input_items.append({"type": "message", "role": "user", "content": (
                     "DEADLINE: You have 3 turns remaining. You MUST output your findings JSON NOW. "
                     "Do not make any more tool calls. Produce the ```json findings block immediately "
                     "with whatever findings you have collected so far. Partial output is required."
-                )
-                input_items.append({"type": "message", "role": "user", "content": deadline_msg})
+                )})
                 logger.warning("DEADLINE INJECTION: turn %d, 3 turns remaining", turn + 1)
 
             try:
@@ -328,20 +467,16 @@ class OpenAIAgentRunner:
                     "model": self.model,
                     "instructions": build_system_prompt(max_turns, self.has_graph),
                     "tools": tool_defs,
+                    "input": input_items,
                 }
-                if previous_response_id:
-                    kwargs["previous_response_id"] = previous_response_id
-                    kwargs["input"] = input_items
-                else:
-                    kwargs["input"] = input_items
+                if "codex" not in self.model:
+                    kwargs["temperature"] = 0.3
 
                 response = self.client.responses.create(**kwargs)
             except Exception as e:
                 logger.error("API call failed: %s", e)
                 result.returncode = 1
                 break
-
-            previous_response_id = response.id
 
             if response.usage:
                 result.input_tokens += response.usage.input_tokens
@@ -367,14 +502,44 @@ class OpenAIAgentRunner:
                                 logger.debug("Assistant response (truncated):\n%s", text[:3000])
                             else:
                                 logger.info("Assistant response:\n%s", text)
+                            partial = _extract_findings_json(text)
+                            if partial and partial.get("findings"):
+                                findings_draft = partial["findings"]
                 elif item.type == "function_call":
                     function_calls.append(item)
 
             if not function_calls:
-                logger.info("Agent finished after %d turns", turn + 1)
-                break
+                if result.raw_final_message and _extract_findings_json(result.raw_final_message):
+                    logger.info("Agent finished with findings after %d turns", turn + 1)
+                    break
+                remaining = max_turns - (turn + 1)
+                if remaining <= 0:
+                    logger.warning("No findings JSON and no turns left")
+                    break
+                if remaining <= 3:
+                    logger.warning("No findings JSON and only %d turns left — forcing output", remaining)
+                    tool_history.append({
+                        "call": {"type": "function_call", "call_id": f"nudge-{turn}",
+                                 "name": "_system_nudge", "arguments": "{}"},
+                        "output": {"type": "function_call_output", "call_id": f"nudge-{turn}",
+                                   "output": (
+                                       "You have not produced findings JSON yet. You MUST output your "
+                                       "```json findings block NOW with whatever findings you have."
+                                   )},
+                    })
+                else:
+                    logger.info("Text-only response at turn %d — nudging agent to continue review", turn + 1)
+                    tool_history.append({
+                        "call": {"type": "function_call", "call_id": f"nudge-{turn}",
+                                 "name": "_system_nudge", "arguments": "{}"},
+                        "output": {"type": "function_call_output", "call_id": f"nudge-{turn}",
+                                   "output": (
+                                       "Continue your review. Use tool calls to verify findings "
+                                       "in the remaining files."
+                                   )},
+                    })
+                continue
 
-            input_items = []
             for fc in function_calls:
                 result.tool_calls_count += 1
                 fn_name = fc.name
@@ -401,10 +566,18 @@ class OpenAIAgentRunner:
                 remaining = max_turns - (turn + 1)
                 tool_result += f"\n[Turn {turn + 1}/{max_turns} used. {remaining} remaining.]"
 
-                input_items.append({
-                    "type": "function_call_output",
-                    "call_id": fc.call_id,
-                    "output": tool_result,
+                tool_history.append({
+                    "call": {
+                        "type": "function_call",
+                        "call_id": fc.call_id,
+                        "name": fn_name,
+                        "arguments": fc.arguments,
+                    },
+                    "output": {
+                        "type": "function_call_output",
+                        "call_id": fc.call_id,
+                        "output": tool_result,
+                    },
                 })
 
         result.duration_seconds = round(time.time() - start_time, 1)

@@ -17,7 +17,7 @@ class BaseActivity(ABC, Generic[TInput, TOutput]):
     """Base class for all activities."""
 
     def __init__(self):
-        self.logger = get_logger(self.__class__.__name__)
+        self.logger = get_logger(f"codehawk.{self.__class__.__name__}")
 
     @abstractmethod
     def execute(self, input_data: TInput) -> TOutput:
