@@ -2,11 +2,44 @@
 
 ## React 16
 
+### Available patterns
 - [ ] `componentDidMount` / `componentDidUpdate` / `componentWillUnmount` lifecycle methods balance subscriptions with cleanup
 - [ ] `setState` in `componentDidUpdate` guarded with a condition to avoid infinite update loops
 - [ ] Error boundaries (`componentDidCatch`) present around UI sections that render user data
 - [ ] `key` prop on list items uses a stable unique ID, not array index when list is reordered/filtered
 - [ ] `propTypes` or TypeScript types defined for all component props
+- [ ] Hooks (`useState`, `useEffect`, `useCallback`, `useMemo`, `useRef`, `useReducer`, `useContext`) available from React 16.8+ — prefer functional components with hooks over class components
+- [ ] `useSelector` / `useDispatch` available from react-redux 7.1+ — verify project has react-redux 7+
+- [ ] `React.memo()` for preventing unnecessary re-renders on pure functional components
+- [ ] `React.lazy()` with `Suspense` for code-splitting (React 16.6+)
+- [ ] `React.createContext` / `useContext` for prop drilling avoidance
+
+### DO NOT suggest (not available in React 16)
+- [ ] No `useId()` — generate IDs manually or use a counter
+- [ ] No `useTransition()` / `startTransition()` — no concurrent rendering
+- [ ] No `useDeferredValue()` — use manual debounce patterns
+- [ ] No `useSyncExternalStore()` — use `useEffect` + `useState` for external store subscriptions
+- [ ] No `use()` hook for data fetching — use `useEffect` + `useState`
+- [ ] No `useOptimistic()` — implement optimistic updates manually with `useState`
+- [ ] No automatic batching of state updates outside React event handlers — only batched inside React events
+- [ ] No `createRoot()` / `hydrateRoot()` — use `ReactDOM.render()` and `ReactDOM.hydrate()`
+- [ ] No Server Components or `"use client"` / `"use server"` directives
+- [ ] No `Suspense` for data fetching — `Suspense` only works with `React.lazy()` in React 16
+- [ ] No `flushSync` — state updates are always synchronous in React event handlers
+
+### React Router v5 (common with React 16 projects)
+- [ ] Uses `<Switch>` not `<Routes>` — `<Routes>` is react-router v6+
+- [ ] Uses `useHistory()` not `useNavigate()` — `useNavigate()` is v6+
+- [ ] Uses `<Route component={X}>` or `<Route render={fn}>` not `<Route element={<X/>}>`
+- [ ] No `<Outlet>` or nested route elements — use render props or component prop
+- [ ] `useParams()`, `useLocation()`, `useRouteMatch()` available in v5
+
+### Redux 3.x-4.x (common with React 16 projects)
+- [ ] No Redux Toolkit (`createSlice`, `createAsyncThunk`, `configureStore`, RTK Query)
+- [ ] Uses `createStore()` with manual reducers and action types
+- [ ] Uses `combineReducers()` for reducer composition
+- [ ] Middleware via `applyMiddleware()` — not `configureStore` middleware option
+- [ ] Side effects via redux-saga or redux-thunk — not RTK Query
 
 ## React 17+
 

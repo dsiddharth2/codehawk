@@ -18,6 +18,44 @@
 - [ ] `null` and `undefined` handled distinctly where both are possible values
 - [ ] Large arrays not iterated with `Array.prototype.reduce` when a simple loop is clearer
 
+## ES2017-ES2019
+
+### Available
+- [ ] `async/await` available (ES2017) — prefer over `.then()` chains
+- [ ] `Object.entries()` / `Object.values()` available (ES2017)
+- [ ] `String.padStart()` / `String.padEnd()` available (ES2017)
+- [ ] `Object.getOwnPropertyDescriptors()` available (ES2017)
+- [ ] Rest/spread properties on objects available (ES2018): `const { a, ...rest } = obj`
+- [ ] `Promise.finally()` available (ES2018)
+- [ ] `for await...of` available (ES2018) for async iteration
+- [ ] `Array.flat()` / `Array.flatMap()` available (ES2019)
+- [ ] `Object.fromEntries()` available (ES2019)
+- [ ] `String.trimStart()` / `String.trimEnd()` available (ES2019)
+- [ ] `try { } catch { }` without binding available (ES2019)
+
+### DO NOT suggest (not available pre-ES2020)
+- [ ] No optional chaining (`?.`) — use manual null checks: `obj && obj.prop && obj.prop.method()`
+- [ ] No nullish coalescing (`??`) — use ternary or `||` (but beware of `0`/`""` being falsy with `||`)
+- [ ] No `Promise.allSettled()` — use `Promise.all()` with individual `.catch()` wrappers
+- [ ] No `globalThis` — use `window` (browser) or `global` (Node)
+- [ ] No `BigInt` literals (`123n`)
+- [ ] No `String.matchAll()` — use regex with `exec()` in a loop
+- [ ] No `import.meta` — use `__dirname` / `__filename` in Node
+- [ ] No `Array.at()` (ES2022) — use `arr[arr.length - 1]` for last element
+- [ ] No `Object.hasOwn()` (ES2022) — use `Object.prototype.hasOwnProperty.call(obj, key)`
+- [ ] No `structuredClone()` — use `JSON.parse(JSON.stringify(obj))` or lodash `cloneDeep`
+- [ ] No `String.replaceAll()` (ES2021) — use regex with global flag: `str.replace(/pattern/g, replacement)`
+- [ ] No private class fields (`#field`) (ES2022) — use underscore convention `_field`
+- [ ] No logical assignment operators (`&&=`, `||=`, `??=`) (ES2021)
+- [ ] No `Error` cause option (`{ cause: err }`) (ES2022)
+
+### Node.js 12.x constraints (if applicable)
+- [ ] No `fs/promises` — use `util.promisify(fs.readFile)` or callbacks
+- [ ] No `AbortController` — use manual cancellation flags
+- [ ] No optional chaining in Node-executed code (only in webpack-transpiled browser code)
+- [ ] No top-level `await`
+- [ ] No `worker_threads` stable API for CPU-bound work (experimental in 12)
+
 ## ES2020+
 
 - [ ] Optional chaining (`?.`) used instead of manual null checks for deep property access

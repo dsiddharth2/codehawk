@@ -19,6 +19,48 @@
 - [ ] No reflection over private members of external types
 - [ ] Enum flags decorated with `[Flags]` attribute when bit-masking is intended
 
+## .NET Framework 4.x
+
+- [ ] C# version limited to 7.3 — no `record` types, `init` properties, `required` keyword, file-scoped namespaces, global usings, switch expressions, pattern matching `is not null`, top-level statements, raw string literals
+- [ ] `using` declarations without braces (C# 8) have limited support — prefer explicit `using` blocks
+- [ ] `string.Contains(char)` overload not available — use `string.Contains(string)` or `IndexOf`
+- [ ] `string.Contains(value, StringComparison)` not available — use `IndexOf(value, comparison) >= 0`
+- [ ] `ArgumentNullException.ThrowIfNull()` not available — use manual `if (x == null) throw new ArgumentNullException()`
+- [ ] `Span<T>`, `Memory<T>`, `ValueTask` not available or limited — use `byte[]` and `Task`
+- [ ] `System.Text.Json` not available — use `Newtonsoft.Json` / `JsonConvert`
+- [ ] `IAsyncEnumerable<T>` not available — use `Task<List<T>>` or `Task<IEnumerable<T>>`
+- [ ] `ILogger<T>` / `Microsoft.Extensions.Logging` not standard — check if project uses it before suggesting
+- [ ] `HttpClientFactory` not available — use `new HttpClient()` with proper disposal or a static instance
+- [ ] Null-conditional assignment (`x ??= y`) not available (C# 8+) — use explicit null check
+- [ ] `Index` and `Range` types (`^1`, `..`) not available (C# 8+) — use `Length - 1` and `Substring`
+- [ ] `IHttpActionResult` is the return type for Web API controllers — not `IActionResult` or `ActionResult<T>`
+
+## EF 6.x
+
+- [ ] No `ExecuteUpdateAsync()` / `ExecuteDeleteAsync()` — use loop + `SaveChanges()` or raw SQL
+- [ ] No compiled queries — use parameterized raw SQL for performance-critical paths
+- [ ] No `IAsyncEnumerable` query streaming — use `ToListAsync()`
+- [ ] No bulk insert/update operations built-in — use `AddOrUpdate()` for seeds, raw SQL for bulk ops
+- [ ] Migrations use `DbMigration` base class, not `Migration`
+- [ ] `DbContext` uses `DbSet<T>` with `DbModelBuilder` configuration, not `OnModelCreating` fluent API style
+- [ ] Connection strings in `Web.config`, not `appsettings.json`
+- [ ] `SqlQuery<T>()` for raw SQL queries, not `FromSqlRaw()`
+- [ ] No `.AsNoTracking()` on `DbSet` — use `AsNoTracking()` via extension or manual detach
+- [ ] `Include()` for eager loading uses string paths (`Include("Orders.Items")`) or lambda — verify overload exists
+
+## ASP.NET Web API 5.x
+
+- [ ] No `[ApiController]` attribute — validation is manual, not automatic
+- [ ] No `ActionResult<T>` — use `IHttpActionResult` (`Ok()`, `NotFound()`, `BadRequest()`)
+- [ ] No minimal APIs — all endpoints are controller actions
+- [ ] No `[FromBody]` auto-binding on complex types — may need explicit `[FromBody]` attribute
+- [ ] No built-in model validation auto-response — check `ModelState.IsValid` manually
+- [ ] Route templates use `[Route("api/controller/{id}/{action}")]` convention
+- [ ] No `ProblemDetails` — return custom error objects or use `BadRequest(ModelState)`
+- [ ] `GlobalConfiguration.Configuration.DependencyResolver` for DI — not `IServiceProvider`
+- [ ] CORS configured via `EnableCorsAttribute` or `Web.config`, not middleware pipeline
+- [ ] No `IOptions<T>` pattern — configuration via `ConfigurationManager` or custom settings classes
+
 ## .NET 6+
 
 - [ ] `DateOnly` and `TimeOnly` used instead of `DateTime` for date-only or time-only values
