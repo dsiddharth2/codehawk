@@ -29,7 +29,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 # ---------------------------------------------------------------------------
 
 SCHEMA_PATH = Path(__file__).parent.parent / "commands" / "findings-schema.json"
-MIN_CONFIDENCE = 0.7
+MIN_CONFIDENCE = 0.5
 MAX_TOTAL_FINDINGS = 50  # Default; overridden by settings.max_total_findings at runtime
 MAX_PER_FILE = 5  # Default; overridden by settings.max_per_file_findings at runtime
 CODEREVIEW_YML = ".codereview.yml"
@@ -140,11 +140,14 @@ CATEGORY_REMAP = {
 
 
 def _normalize_findings(data: dict) -> None:
-    """Remap agent-invented categories to valid schema values in-place."""
+    """Remap agent-invented categories and fill missing required fields in-place."""
     for f in data.get("findings", []):
         cat = f.get("category", "")
         if cat not in VALID_CATEGORIES:
             f["category"] = CATEGORY_REMAP.get(cat, "best_practices")
+        if "title" not in f:
+            msg = f.get("message", "")
+            f["title"] = (msg[:80] + "...") if len(msg) > 80 else msg
 
 
 def _validate_schema(data: dict) -> List[str]:

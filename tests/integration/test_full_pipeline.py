@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 import post_findings as pf
+from models.review_models import ReviewMode
 from review_job import ReviewJob, ReviewJobConfig
 
 from .conftest import (
@@ -109,6 +110,7 @@ class TestFullPipeline:
             model=model,
             max_turns=MAX_TURNS_INTEGRATION,
             prompt_path=REVIEW_PROMPT,
+            review_mode=ReviewMode.CHECK_NEW,
         )
 
         job = ReviewJob(config, settings=settings)

@@ -108,7 +108,7 @@ class TestConfidenceFilter:
             "id": "cr-201", "file": "src/bar.cs", "line": 5,
             "severity": "warning", "category": "performance",
             "title": "Low confidence", "message": "Should be filtered",
-            "confidence": 0.5, "suggestion": None,
+            "confidence": 0.3, "suggestion": None,
         }]
         path = _write_findings(tmp_path, findings)
         output = pf.run(findings_path=path, dry_run=True)
@@ -119,8 +119,8 @@ class TestConfidenceFilter:
         findings = [{
             "id": "cr-202", "file": "src/edge.cs", "line": 1,
             "severity": "warning", "category": "best_practices",
-            "title": "At threshold", "message": "Confidence exactly 0.7",
-            "confidence": 0.7, "suggestion": None,
+            "title": "At threshold", "message": "Confidence exactly 0.5",
+            "confidence": 0.5, "suggestion": None,
         }]
         path = _write_findings(tmp_path, findings)
         output = pf.run(findings_path=path, dry_run=True)

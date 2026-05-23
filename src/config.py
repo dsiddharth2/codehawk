@@ -71,7 +71,7 @@ class Settings(BaseSettings):
 
     # Review Configuration
     min_confidence_score: float = Field(
-        default=0.7,
+        default=0.5,
         ge=0.0,
         le=1.0,
         description="Minimum confidence score to post findings"
@@ -117,7 +117,7 @@ class Settings(BaseSettings):
         description="Diff size threshold in KB above which smart summarization is used"
     )
     batch_size: int = Field(
-        default=25,
+        default=10,
         ge=5,
         le=100,
         description="Number of code files per review batch"

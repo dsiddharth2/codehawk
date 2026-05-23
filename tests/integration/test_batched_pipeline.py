@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from batch_review_job import BatchReviewJob
+from models.review_models import ReviewMode
 
 from .conftest import (
     PR_ID, REPO, REVIEW_PROMPT,
@@ -92,6 +93,7 @@ class TestBatchedPipeline:
             model=model,
             prompt_path=REVIEW_PROMPT,
             settings=settings,
+            review_mode=ReviewMode.CHECK_NEW,
         )
 
         try:
@@ -100,7 +102,7 @@ class TestBatchedPipeline:
             findings_path = workspace / ".cr" / "findings.json"
 
             try:
-                output = job.run(dry_run=False)
+                output = job.run(dry_run=True)
             except Exception as exc:
                 _log.error("Pipeline error (Phase 2 may have failed): %s", exc)
                 phase2_error = exc

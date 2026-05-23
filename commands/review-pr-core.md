@@ -102,14 +102,15 @@ For T4/T5, prioritize files in this order:
 1. Files in security-sensitive paths (auth, crypto, permissions)
 2. Files that changed the most lines
 3. Entry points (API handlers, CLI commands, route definitions)
-4. Skip test files, generated code, and lock files
+4. Test files — review at LOW depth (scan for missing assertions, wrong mocks, dead tests). Still add to `files_clean[]` or `findings[]`.
+5. Skip generated code and lock files only
 
 **100% coverage is required regardless of tier.** Every code file in your batch must be reviewed. You must either produce a finding for a file or list it in `files_clean[]` in findings.json. Files that appear in neither are considered skipped — skipped files fail the CI gate.
 
 **Within your tier strategy, depth per file is determined by risk tier** (shown in the pre-computed risk table):
 - **HIGH risk** — Full review. Read the full file via `read_local_file` before flagging. Check callers via `get_callers`. Verify CRITICAL findings against full context. Spend multiple turns if needed.
 - **MEDIUM risk** — Review from the pre-injected diff. Flag obvious issues. Use `read_local_file` only if something looks wrong but you need more context.
-- **LOW risk** — Scan the diff for security issues and critical bugs only. If nothing critical, add to `files_clean[]` and move on.
+- **LOW risk** — Scan the diff for security issues, critical bugs, error handling gaps, naming issues, and obvious code style problems. If the file is genuinely clean, add to `files_clean[]`. Do not skip a file just because it is low risk — every file deserves at least a careful read of the diff.
 
 Budget your 40 turns wisely: spend more on HIGH, less on LOW. But every file must appear in the output.
 
@@ -195,7 +196,7 @@ For each genuine issue found:
 - Assign `id`: `cr-001`, `cr-002`, ... (sequential, padded to 3 digits)
 - Assign `severity`: `critical`, `warning`, or `suggestion`
 - Assign `category`: `security`, `performance`, `best_practices`, `architecture`, `correctness`, `error_handling`, `code_style`, `documentation`, `testing`
-- Assign `confidence`: 0.0-1.0 — how certain are you this is a real problem? (findings below 0.7 are filtered out by post_findings.py — set honestly). For code style and documentation findings (unused imports, naming issues, missing docs), use 0.85+ confidence — these are objectively verifiable, not speculative.
+- Assign `confidence`: 0.0-1.0 — how certain are you this is a real problem? (findings below 0.5 are filtered out by post_findings.py — set honestly). For code style and documentation findings (unused imports, naming issues, missing docs), use 0.85+ confidence — these are objectively verifiable, not speculative. For correctness and error handling issues verified via tool calls, use 0.7+. For suspected issues based on diff context alone, use 0.5-0.7.
 - Write a concrete `message` explaining the problem and why it matters
 - **Always** include a `suggestion` with a concrete code fix — show the corrected code the developer can copy-paste, not just a description of what to change. Use a fenced code block inside the string when possible.
 
