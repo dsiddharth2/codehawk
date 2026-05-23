@@ -43,8 +43,8 @@ MAX_TURNS_INTEGRATION = 40
 #ADO_ORG = "blub0x"
 #ADO_PROJECT = "BluB0X AI"
 
-PR_ID = 6658
-REPO = "BluSKY"
+PR_ID = 6686
+REPO = "BluSKYFunctionApps"
 ADO_ORG = "blub0x"
 ADO_PROJECT = "BluSKY Git"
 
