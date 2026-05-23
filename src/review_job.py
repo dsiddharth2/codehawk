@@ -595,9 +595,37 @@ class ReviewJob:
         elif self.config.review_mode == ReviewMode.CHECK_NEW:
             text += self._build_check_new_instructions()
 
+        text += self._build_review_modes_section()
         text += self._build_config_section()
 
         return text
+
+    def _build_review_modes_section(self) -> str:
+        """Inline review-mode checklists so the model sees the actual rules."""
+        commands_dir = Path(__file__).resolve().parent.parent / "commands"
+        mode_files = [
+            "review-mode-standard.md",
+            "review-mode-security.md",
+            "review-mode-architecture.md",
+            "review-mode-performance.md",
+            "review-mode-migration.md",
+        ]
+        lines = ["", "---", "", "## Review Mode Checklists", ""]
+        loaded = 0
+        for name in mode_files:
+            path = commands_dir / name
+            if not path.is_file():
+                continue
+            try:
+                content = path.read_text(encoding="utf-8")
+                lines.append(content)
+                lines.append("")
+                loaded += 1
+            except Exception as exc:
+                logger.debug("Failed to load review mode %s: %s", name, exc)
+        if loaded:
+            logger.info("Injected %d review mode checklists", loaded)
+        return "\n".join(lines)
 
     def _build_config_section(self) -> str:
         """Pre-load project config files so the agent doesn't waste turns reading them.
