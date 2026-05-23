@@ -794,10 +794,40 @@ class ReviewJob:
         self, changed_files, changed_file_paths, diffs, failed_diffs, analysis,
         graph_store, source_commit, target_commit,
     ) -> AgentResult:
-        """Two-pass review: Pass 1 (scan) → Pass 2 (verify)."""
-        # --- Pass 1: Scan ---
+        """Two-pass review: Pass 1A (standard scan) + Pass 1B (deep scan) → Pass 2 (verify)."""
         scan_prompt = self._build_scan_prompt(changed_files, diffs, analysis, failed_diffs)
-        candidates, files_clean, scan_result = self._run_scan_pass(scan_prompt)
+
+        # --- Pass 1A: Standard scan (correctness, error_handling, testing, code_style) ---
+        candidates_a, files_clean_a, scan_result_a = self._run_scan_pass(
+            scan_prompt, scan_type="standard",
+        )
+        logger.info(
+            "Pass 1A (standard): %d candidates, %d clean",
+            len(candidates_a), len(files_clean_a),
+        )
+
+        # --- Pass 1B: Deep scan (security, performance, architecture) ---
+        deep_prompt = self._build_deep_scan_prompt(changed_files, diffs, analysis, failed_diffs)
+        candidates_b, files_clean_b, scan_result_b = self._run_scan_pass(
+            deep_prompt, scan_type="deep",
+        )
+        logger.info(
+            "Pass 1B (deep): %d candidates, %d clean",
+            len(candidates_b), len(files_clean_b),
+        )
+
+        # --- Merge candidates from both scans ---
+        candidates = self._merge_scan_candidates(candidates_a, candidates_b)
+        files_clean = list(set(files_clean_a) & set(files_clean_b))
+        total_scan_tokens = (
+            scan_result_a.input_tokens + scan_result_a.output_tokens
+            + scan_result_b.input_tokens + scan_result_b.output_tokens
+        )
+        logger.info(
+            "Merged: %d candidates (%d from standard, %d from deep), %d clean, %d scan tokens",
+            len(candidates), len(candidates_a), len(candidates_b),
+            len(files_clean), total_scan_tokens,
+        )
 
         # Store for fallback use in _run_verify_pass
         self._scan_candidates = candidates
@@ -805,13 +835,12 @@ class ReviewJob:
 
         # If no candidates, skip Pass 2
         if not candidates:
-            logger.info("Pass 1 found no candidates — skipping Pass 2")
+            logger.info("Both scans found no candidates — skipping Pass 2")
             result = AgentResult()
-            result.model = scan_result.model if hasattr(scan_result, 'model') else self.config.model
-            result.input_tokens = scan_result.input_tokens
-            result.output_tokens = scan_result.output_tokens
-            result.total_tokens = scan_result.total_tokens
-            result.duration_seconds = scan_result.duration_seconds if hasattr(scan_result, 'duration_seconds') else 0
+            result.model = self.config.model
+            result.input_tokens = scan_result_a.input_tokens + scan_result_b.input_tokens
+            result.output_tokens = scan_result_a.output_tokens + scan_result_b.output_tokens
+            result.total_tokens = total_scan_tokens
             result.findings_data = {
                 "pr_id": self.config.pr_id,
                 "repo": self.config.repo,
@@ -827,12 +856,23 @@ class ReviewJob:
         verify_prompt = self._build_verify_prompt(candidates, diffs, changed_file_paths)
         verify_result = self._run_verify_pass(verify_prompt)
 
-        # Merge token usage from both passes
-        verify_result.input_tokens += scan_result.input_tokens
-        verify_result.output_tokens += scan_result.output_tokens
-        verify_result.total_tokens += scan_result.total_tokens
+        # Merge token usage from all passes
+        verify_result.input_tokens += scan_result_a.input_tokens + scan_result_b.input_tokens
+        verify_result.output_tokens += scan_result_a.output_tokens + scan_result_b.output_tokens
+        verify_result.total_tokens += total_scan_tokens
 
         return verify_result
+
+    def _merge_scan_candidates(self, candidates_a: list, candidates_b: list) -> list:
+        """Merge candidates from standard and deep scans, deduplicating by (file, line, category)."""
+        seen = set()
+        merged = []
+        for c in candidates_a + candidates_b:
+            key = (c.file, c.line, c.category)
+            if key not in seen:
+                seen.add(key)
+                merged.append(c)
+        return merged
 
     def _parse_candidates(self, raw_text: str) -> tuple[list, list[str]]:
         """Parse Pass 1 output into ScanCandidate list and files_clean list.
@@ -933,6 +973,58 @@ class ReviewJob:
 
         return "\n".join(lines)
 
+    def _build_deep_scan_prompt(
+        self,
+        changed_files,
+        diffs: dict[str, str],
+        analysis: dict,
+        failed_diffs: list[str] | None = None,
+    ) -> str:
+        """Build the user prompt for Pass 1B (deep scan) — security, performance, architecture only."""
+        commands_dir = Path(__file__).resolve().parent.parent / "commands"
+        deep_template = commands_dir / "review-scan-deep.md"
+
+        lines = []
+        if deep_template.is_file():
+            lines.append(deep_template.read_text(encoding="utf-8"))
+        else:
+            lines.append(
+                "Identify security, performance, and architecture candidates from the diffs below. "
+                "Do NOT flag correctness, testing, or code_style issues. "
+                "Output JSON with candidates[] and files_clean[]."
+            )
+
+        lines.append("")
+
+        # Only inject security, performance, architecture checklists
+        mode_files = ["review-mode-security.md", "review-mode-performance.md", "review-mode-architecture.md"]
+        for name in mode_files:
+            path = commands_dir / name
+            if path.is_file():
+                try:
+                    lines.append(path.read_text(encoding="utf-8"))
+                    lines.append("")
+                except Exception:
+                    pass
+
+        # Lang-specific rules
+        file_paths = [fc if isinstance(fc, str) else fc.path for fc in (changed_files or [])]
+        lines.append(self._build_config_section(file_paths))
+
+        # Diffs (same as standard scan)
+        if diffs:
+            lines.append("## File Diffs")
+            lines.append("")
+            for fp, diff_text in diffs.items():
+                lines.append(f"### `{fp}`")
+                if diff_text.startswith("[DIFF SUMMARY]"):
+                    lines.append(diff_text)
+                else:
+                    lines.append(f"```diff\n{diff_text}\n```")
+                lines.append("")
+
+        return "\n".join(lines)
+
     def _build_verify_prompt(
         self,
         candidates: list,
@@ -1020,27 +1112,47 @@ class ReviewJob:
 
         return "\n".join(lines)
 
-    def _run_scan_pass(self, scan_prompt: str) -> tuple[list, list[str], "AgentResult"]:
-        """Run Pass 1 (scan) — single-turn API call to identify candidates.
+    def _run_scan_pass(
+        self, scan_prompt: str, scan_type: str = "standard",
+    ) -> tuple[list, list[str], "AgentResult"]:
+        """Run a scan pass — single-turn API call to identify candidates.
+
+        scan_type: "standard" (correctness, error_handling, testing, code_style)
+                   or "deep" (security, performance, architecture)
 
         Returns (candidates, files_clean, agent_result).
         Raises ValueError if all retries exhausted.
         """
-        scan_system_prompt = (
-            "You are a code review scanner. Process each file's diff one at a time. "
-            "For EACH file, check ALL categories before moving to the next file: "
-            "security (injection, auth, secrets, XSS, error disclosure), "
-            "performance (N+1 subqueries in LINQ/ORM projections, sequential awaits in loops, O(n^2), missing pagination), "
-            "architecture (business logic in controllers/UI, DTO inheriting entity, breaking codebase patterns), "
-            "error_handling (swallowed exceptions, missing null checks, dict access without ContainsKey, unhandled fetch), "
-            "correctness (logic errors, data loss, regressions, falsy-zero bugs), "
-            "testing (broken assertions, test gaps), "
-            "code_style (unused imports, dead code). "
-            "Output structured JSON with candidates[] and files_clean[]. "
-            "A scan that only produces correctness findings has failed — "
-            "every file must be checked for security, performance, and architecture issues too. "
-            "You have NO tools available — work only from the diffs provided."
-        )
+        if scan_type == "deep":
+            scan_system_prompt = (
+                "You are a security, performance, and architecture specialist reviewer. "
+                "These three categories are your PRIMARY focus — they are the highest-value findings. "
+                "Do NOT flag correctness bugs, logic errors, testing issues, or code style — "
+                "those are secondary and already covered by a separate scan. "
+                "SECURITY: injection (SQL, command, path, XSS), hardcoded secrets/tokens, "
+                "missing auth on endpoints, raw exception messages returned to clients, "
+                "unsanitized user input rendered as HTML, CORS wildcards. "
+                "PERFORMANCE: N+1 queries (correlated subqueries inside LINQ Select/ORM projection), "
+                "sequential await in loops (should be parallel), O(n^2) loops, "
+                "missing pagination on list endpoints, unbounded data loading, "
+                "blocking sync I/O in async paths, missing memoization on hot render paths. "
+                "ARCHITECTURE: business logic in controllers/UI instead of services/query tasks, "
+                "DTO/ViewModel inheriting from entity model, breaking established codebase patterns, "
+                "cross-layer coupling, missing abstractions. "
+                "Output structured JSON with candidates[] and files_clean[]. "
+                "You have NO tools available — work only from the diffs provided."
+            )
+        else:
+            scan_system_prompt = (
+                "You are a code review scanner focused on correctness and code quality. "
+                "Focus on: correctness (logic errors, data loss, regressions, falsy-zero bugs), "
+                "error_handling (swallowed exceptions, missing null checks, unhandled fetch), "
+                "testing (broken assertions, wrong matchers, test gaps), "
+                "code_style (unused imports, dead code). "
+                "Do NOT focus on security, performance, or architecture — those are covered separately. "
+                "Output structured JSON with candidates[] and files_clean[]. "
+                "You have NO tools available — work only from the diffs provided."
+            )
 
         runner = OpenAIAgentRunner(
             settings=self.settings,
@@ -1065,14 +1177,15 @@ class ReviewJob:
             result = runner.run_single_turn(scan_system_prompt, prompt)
 
             if result.returncode != 0:
-                last_error = ValueError(f"Pass 1 API call failed (attempt {attempt + 1})")
-                logger.warning("Pass 1 attempt %d failed: API error", attempt + 1)
+                last_error = ValueError(f"Pass 1 ({scan_type}) API call failed (attempt {attempt + 1})")
+                logger.warning("Pass 1 (%s) attempt %d failed: API error", scan_type, attempt + 1)
                 continue
 
             try:
                 candidates, files_clean = self._parse_candidates(result.raw_final_message)
                 logger.info(
-                    "Pass 1 complete: %d candidates (%d need verification), %d clean files",
+                    "Pass 1 (%s) complete: %d candidates (%d need verification), %d clean files",
+                    scan_type,
                     len(candidates),
                     sum(1 for c in candidates if c.needs_verification),
                     len(files_clean),
@@ -1080,9 +1193,9 @@ class ReviewJob:
                 return candidates, files_clean, result
             except ValueError as e:
                 last_error = e
-                logger.warning("Pass 1 attempt %d: %s", attempt + 1, e)
+                logger.warning("Pass 1 (%s) attempt %d: %s", scan_type, attempt + 1, e)
 
-        raise ValueError(f"Pass 1 failed after {1 + max_retries} attempts: {last_error}")
+        raise ValueError(f"Pass 1 ({scan_type}) failed after {1 + max_retries} attempts: {last_error}")
 
     def _run_verify_pass(self, verify_prompt: str) -> "AgentResult":
         """Run Pass 2 (verify) — short agent loop with full history.

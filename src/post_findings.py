@@ -139,8 +139,11 @@ CATEGORY_REMAP = {
 }
 
 
+_VALID_FINDING_KEYS = {"id", "file", "line", "severity", "category", "title", "message", "confidence", "suggestion"}
+
+
 def _normalize_findings(data: dict) -> None:
-    """Remap agent-invented categories and fill missing required fields in-place."""
+    """Remap agent-invented categories, fill missing fields, strip unknown keys."""
     for f in data.get("findings", []):
         cat = f.get("category", "")
         if cat not in VALID_CATEGORIES:
@@ -148,6 +151,9 @@ def _normalize_findings(data: dict) -> None:
         if "title" not in f:
             msg = f.get("message", "")
             f["title"] = (msg[:80] + "...") if len(msg) > 80 else msg
+        extra = set(f.keys()) - _VALID_FINDING_KEYS
+        for k in extra:
+            del f[k]
 
 
 def _validate_schema(data: dict) -> List[str]:
