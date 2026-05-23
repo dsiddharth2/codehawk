@@ -17,6 +17,18 @@
 - [ ] `final` fields used for values that don't change after construction
 - [ ] Thread-shared mutable state access synchronized or uses `java.util.concurrent` types
 
+## Java 8+
+
+- [ ] `Optional` used for return types that may be absent — not null returns from public methods
+- [ ] Stream API does not perform side effects in `map()` or `filter()` — use `forEach()` or `peek()` for debugging
+- [ ] `Collectors.toUnmodifiableList()` or `List.copyOf()` used when returned collection should not be modified
+- [ ] Lambda expressions in `Comparator.comparing()` instead of anonymous `Comparator` classes
+- [ ] `CompletableFuture` chains handle exceptions with `.exceptionally()` or `.handle()` — not left unhandled
+- [ ] `ConcurrentHashMap` used instead of `Collections.synchronizedMap()` for concurrent access
+- [ ] `DateTimeFormatter` and `LocalDate`/`LocalDateTime` used instead of `SimpleDateFormat` and `Date`
+- [ ] Stream pipelines terminated — no intermediate operations without a terminal operation
+- [ ] `@FunctionalInterface` annotation on interfaces intended as lambda targets
+
 ## Java 11+
 
 - [ ] `var` used only where the type is obvious from the right-hand side (improves readability)

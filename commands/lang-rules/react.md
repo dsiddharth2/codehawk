@@ -71,3 +71,24 @@
 - [ ] `useOptimistic` used for optimistic UI updates that may need to roll back on server error
 - [ ] Error boundaries reset their state when `key` changes — not left in error state after navigation
 - [ ] `React.lazy()` combined with `Suspense` for code-split components — not dynamic imports without a boundary
+
+## Accessibility (All React Versions)
+
+- [ ] Interactive elements (`button`, `a`, `input`) used for clickable content — not `div` or `span` with `onClick`
+- [ ] `aria-label` or `aria-labelledby` on icon-only buttons and links
+- [ ] `alt` text on all `<img>` elements — empty `alt=""` for decorative images
+- [ ] Form inputs have associated `<label>` via `htmlFor` — not placeholder-only labels
+- [ ] `role` attribute not used to override semantic HTML — use the correct element instead
+- [ ] `aria-hidden="true"` on decorative icons and elements not relevant to screen readers
+- [ ] Keyboard navigation works for all interactive flows — `onKeyDown` handler alongside `onClick`
+- [ ] Focus management after modal open/close — focus trapped in modal, restored on close
+- [ ] `tabIndex` not set to positive values — only `0` (natural order) or `-1` (programmatic focus)
+- [ ] Live regions (`aria-live="polite"`) used for dynamic content updates (toasts, status changes)
+
+## Testing (All React Versions)
+
+- [ ] Tests query by role, label, or text — not by class name, ID, or test-ID as first choice
+- [ ] `screen.getByText()` receives string or regex — not raw numbers (throws in RTL)
+- [ ] `userEvent` preferred over `fireEvent` for simulating user interactions (more realistic)
+- [ ] Async operations awaited with `waitFor()` or `findBy*` — not `getBy*` with manual delay
+- [ ] Component tests render with required context providers (Redux, Router, i18n) via test wrapper

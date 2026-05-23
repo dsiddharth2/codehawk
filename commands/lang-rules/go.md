@@ -24,6 +24,13 @@
 - [ ] `os.Exit` not called inside library code — only acceptable in `main()` after cleanup
 - [ ] Table-driven tests (`t.Run`) used for functions with multiple input/output cases
 
+- [ ] Pointer receiver used when method mutates state or receiver is large; value receiver for small immutable types
+- [ ] `context.WithCancel` / `context.WithTimeout` results cancelled via `defer cancel()` to avoid context leak
+- [ ] No goroutine spawned without a way to signal shutdown — use context cancellation or done channel
+- [ ] `http.Client` has explicit `Timeout` set — default is no timeout
+- [ ] `json.Decoder` used for streaming/large JSON — `json.Unmarshal` for small known-size payloads
+- [ ] Race conditions tested with `go test -race` — enabled in CI
+
 ## Go 1.18+
 
 - [ ] Generics used to eliminate code duplication across types, not as over-engineering for single-type cases

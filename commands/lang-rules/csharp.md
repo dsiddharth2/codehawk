@@ -61,6 +61,17 @@
 - [ ] CORS configured via `EnableCorsAttribute` or `Web.config`, not middleware pipeline
 - [ ] No `IOptions<T>` pattern — configuration via `ConfigurationManager` or custom settings classes
 
+## LINQ (All .NET Versions)
+
+- [ ] `IQueryable` queries not materialized prematurely — `.ToList()` only when results are needed
+- [ ] `IEnumerable` results not iterated multiple times — materialize with `.ToList()` before re-use
+- [ ] `.FirstOrDefault()` / `.SingleOrDefault()` results null-checked before property access
+- [ ] `.Where().First()` replaced with `.First(predicate)` for clarity
+- [ ] `.Any()` used instead of `.Count() > 0` for existence checks (short-circuits)
+- [ ] `.Select()` projections do not include side effects — LINQ should be pure
+- [ ] `.OrderBy()` not called multiple times — use `.ThenBy()` for secondary sort
+- [ ] `.GroupBy()` results not re-enumerated inside the loop — materialize or use lookup
+
 ## .NET 6+
 
 - [ ] `DateOnly` and `TimeOnly` used instead of `DateTime` for date-only or time-only values

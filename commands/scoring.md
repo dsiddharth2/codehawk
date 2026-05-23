@@ -91,10 +91,10 @@ All findings must include a `confidence` score: 0.0-1.0.
 | 0.90 – 1.00 | Certain. The issue is unambiguous. Would fail any reasonable code review. |
 | 0.80 – 0.89 | High confidence. The pattern is almost certainly wrong given context. |
 | 0.70 – 0.79 | Moderate confidence. The issue is likely real, but context may explain it. |
-| 0.50 – 0.69 | Low confidence. Suspicious pattern, but may be intentional or handled elsewhere. **Filtered out — do not use if you want the finding posted.** |
+| 0.50 – 0.69 | Low confidence. Suspicious pattern, but may be intentional or handled elsewhere. Still posted but contributes less to scoring. |
 | < 0.50 | Speculative. Do not include in findings. |
 
-**Filter threshold:** `post_findings.py` drops all findings with `confidence < 0.7` before posting. Set confidence honestly — do not inflate to bypass the filter.
+**Filter threshold:** `post_findings.py` drops all findings with `confidence < 0.5` before posting. Set confidence honestly — do not inflate to bypass the filter. Security findings at 0.6+ confidence are worth posting — the cost of missing a real vulnerability exceeds the cost of a false positive comment.
 
 **Calibration guidance:**
 - If you need to read 3+ additional files to confirm a finding is real, it's probably ≤0.75.

@@ -17,6 +17,16 @@
 - [ ] No circular `require()` / `import` dependencies
 - [ ] `null` and `undefined` handled distinctly where both are possible values
 - [ ] Large arrays not iterated with `Array.prototype.reduce` when a simple loop is clearer
+- [ ] `fetch()` responses checked with `response.ok` before reading body — non-2xx does not throw
+- [ ] `fetch()` / `XMLHttpRequest` calls have error handling for network failures
+- [ ] `setTimeout` / `setInterval` cleaned up on component unmount or scope exit
+- [ ] `FormData.append()` not called with `undefined` values — converts to string `"undefined"`
+- [ ] `parseInt()` called with explicit radix: `parseInt(value, 10)` — not `parseInt(value)`
+- [ ] No prototype pollution — user-controlled keys not used in `obj[key] = value` without validation
+- [ ] `postMessage` origin validated in `message` event handlers — not accepting from `*`
+- [ ] `localStorage` / `sessionStorage` values parsed with try/catch — may contain non-JSON
+- [ ] `Array.isArray()` used for array checks — not `instanceof Array` (fails across iframes)
+- [ ] `Object.keys()` / `Object.entries()` used for iteration — not `for...in` without `hasOwnProperty` guard
 
 ## ES2017-ES2019
 

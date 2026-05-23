@@ -66,6 +66,6 @@ Output findings.json in a ```json code fence. The schema matches the standard fi
 - Every candidate must result in either a finding in `findings[]` or be dropped (with the file appearing in `files_clean[]` if no other findings remain for it).
 - Dropped candidates are false positives — the full file context showed the issue doesn't exist.
 - All findings MUST include a concrete `suggestion` with a copy-pasteable code fix.
-- Confidence must be 0.0-1.0. Findings below 0.7 will be filtered out by post-processing.
+- Confidence must be 0.0-1.0. Findings below 0.5 will be filtered out. Security findings at 0.6+ are worth posting.
 - Max 30 findings total, max 5 per file.
 - IDs must be sequential: cr-001, cr-002, etc.

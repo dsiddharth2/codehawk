@@ -55,6 +55,10 @@ languages:
     extensions: [.php]
     config_files: ["composer.json"]
     rules_file: commands/lang-rules/php.md
+  css:
+    extensions: [.css, .scss, .less, .sass]
+    config_files: []
+    rules_file: commands/lang-rules/css.md
   sql:
     extensions: [.sql]
     config_files: []

@@ -602,7 +602,11 @@ class ReviewJob:
             text += self._build_check_new_instructions()
 
         text += self._build_review_modes_section()
-        text += self._build_config_section()
+        file_paths = [
+            fc if isinstance(fc, str) else fc.path
+            for fc in (changed_files or [])
+        ]
+        text += self._build_config_section(file_paths)
 
         return text
 
@@ -633,16 +637,16 @@ class ReviewJob:
             logger.info("Injected %d review mode checklists", loaded)
         return "\n".join(lines)
 
-    def _build_config_section(self) -> str:
-        """Pre-load project config files so the agent doesn't waste turns reading them.
+    def _build_config_section(self, changed_file_paths: list[str] | None = None) -> str:
+        """Pre-load project config files and language-specific review rules.
 
-        If .codereview.md is present, load it (project-specific rules take precedence).
-        If not, run stack detection and inject version-filtered lang-rules.
+        Always injects lang-rules for languages detected from changed file extensions.
+        Also loads .codereview.md if present (project-specific conventions).
+        Both are complementary: .codereview.md = project conventions, lang-rules = language patterns.
         """
         config_files = [".codereview.md", ".codereview.yml", "AGENTS.md"]
         lines = ["", "---", "", "## Pre-loaded Project Config", ""]
 
-        has_codereview_md = False
         found_any = False
         for name in config_files:
             path = self.config.workspace / name
@@ -653,17 +657,13 @@ class ReviewJob:
                     lines.append(f"```\n{content}\n```")
                     lines.append("")
                     found_any = True
-                    if name == ".codereview.md":
-                        has_codereview_md = True
                 except Exception:
                     pass
 
-        if not has_codereview_md:
-            # Auto-detect stack and inject version-appropriate rules
-            lang_rules = self._build_lang_rules_section()
-            if lang_rules:
-                lines.extend(lang_rules)
-                found_any = True
+        lang_rules = self._build_lang_rules_for_files(changed_file_paths or [])
+        if lang_rules:
+            lines.extend(lang_rules)
+            found_any = True
 
         if not found_any:
             lines.append("No project config files found (.codereview.md, .codereview.yml, AGENTS.md).")
@@ -674,22 +674,54 @@ class ReviewJob:
         lines.append("")
         return "\n".join(lines)
 
-    def _build_lang_rules_section(self) -> list[str]:
-        """Run stack detection and return prompt lines with injected lang rules."""
+    def _detect_languages_from_files(self, file_paths: list[str]) -> list[str]:
+        """Detect languages from changed file extensions using languages.yml registry."""
+        import yaml
+
+        commands_dir = Path(__file__).resolve().parent.parent / "commands"
+        registry_path = commands_dir / "languages.yml"
+        if not registry_path.is_file():
+            return []
+
+        try:
+            registry = yaml.safe_load(registry_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.debug("Failed to load languages.yml: %s", exc)
+            return []
+
+        ext_to_lang: dict[str, str] = {}
+        for lang_name, lang_config in registry.get("languages", {}).items():
+            for ext in lang_config.get("extensions", []):
+                ext_to_lang[ext] = lang_name
+
+        detected = set()
+        for fp in file_paths:
+            ext = Path(fp).suffix.lower()
+            if ext in ext_to_lang:
+                detected.add(ext_to_lang[ext])
+                if ext in (".js", ".jsx"):
+                    detected.add("react")
+
+        return sorted(detected)
+
+    def _build_lang_rules_for_files(self, file_paths: list[str]) -> list[str]:
+        """Detect languages from changed files and inject matching lang-rules."""
+        languages = self._detect_languages_from_files(file_paths)
+        if not languages:
+            return []
+
+        # Run stack detection for version info (best-effort)
+        frameworks: dict[str, dict] = {}
         try:
             import stack_detector as sd
             profile = sd.detect(self.config.workspace)
-        except Exception as exc:
-            logger.warning("Stack detection failed: %s", exc)
-            return []
+            frameworks = {lang: profile.frameworks.get(lang, {}) for lang in languages}
+        except Exception:
+            pass
 
-        if not profile.languages:
-            return []
-
-        # Build version summary string for each detected language
         lang_summaries = []
-        for lang in profile.languages:
-            fw = profile.frameworks.get(lang, {})
+        for lang in languages:
+            fw = frameworks.get(lang, {})
             if fw:
                 fw_str = ", ".join(f"{k}={v}" for k, v in fw.items())
                 lang_summaries.append(f"{lang} ({fw_str})")
@@ -697,25 +729,22 @@ class ReviewJob:
                 lang_summaries.append(lang)
 
         lines = [
-            f"### Auto-detected Stack",
+            "### Language-Specific Review Rules",
             "",
-            f"Detected: {', '.join(lang_summaries)}",
-            f"Config files read: {', '.join(profile.detected_from) if profile.detected_from else 'none'}",
-            "",
-            "The following language-specific review rules apply:",
+            f"Detected from changed files: {', '.join(lang_summaries)}",
             "",
         ]
 
         commands_dir = Path(__file__).resolve().parent.parent / "commands"
         rules_injected = 0
 
-        for lang in profile.languages:
+        for lang in languages:
             rules_file = commands_dir / "lang-rules" / f"{lang}.md"
             if not rules_file.is_file():
                 continue
             try:
                 full_rules = rules_file.read_text(encoding="utf-8")
-                fw = profile.frameworks.get(lang, {})
+                fw = frameworks.get(lang, {})
                 filtered = _filter_rules_for_version(full_rules, lang, fw)
                 if filtered:
                     lines.append(filtered)
@@ -727,7 +756,8 @@ class ReviewJob:
         if rules_injected == 0:
             return []
 
-        logger.info("Injected lang-rules for: %s", ", ".join(profile.languages[:rules_injected]))
+        logger.info("Injected lang-rules for: %s (%d languages from changed files)",
+                     ", ".join(languages[:rules_injected]), rules_injected)
         return lines
 
     def _build_single_pass_prompt(
@@ -858,8 +888,12 @@ class ReviewJob:
         # Review mode checklists (same as single-pass — agent needs these to apply)
         lines.append(self._build_review_modes_section())
 
-        # Lang-specific rules
-        lines.append(self._build_config_section())
+        # Project config + lang-specific rules (detected from changed file extensions)
+        file_paths = [
+            fc if isinstance(fc, str) else fc.path
+            for fc in (changed_files or [])
+        ]
+        lines.append(self._build_config_section(file_paths))
 
         # Risk context
         if analysis:
@@ -993,8 +1027,18 @@ class ReviewJob:
         Raises ValueError if all retries exhausted.
         """
         scan_system_prompt = (
-            "You are a code review scanner. Identify candidate findings from pre-injected diffs. "
+            "You are a code review scanner. Process each file's diff one at a time. "
+            "For EACH file, check ALL categories before moving to the next file: "
+            "security (injection, auth, secrets, XSS, error disclosure), "
+            "performance (N+1 subqueries in LINQ/ORM projections, sequential awaits in loops, O(n^2), missing pagination), "
+            "architecture (business logic in controllers/UI, DTO inheriting entity, breaking codebase patterns), "
+            "error_handling (swallowed exceptions, missing null checks, dict access without ContainsKey, unhandled fetch), "
+            "correctness (logic errors, data loss, regressions, falsy-zero bugs), "
+            "testing (broken assertions, test gaps), "
+            "code_style (unused imports, dead code). "
             "Output structured JSON with candidates[] and files_clean[]. "
+            "A scan that only produces correctness findings has failed — "
+            "every file must be checked for security, performance, and architecture issues too. "
             "You have NO tools available — work only from the diffs provided."
         )
 

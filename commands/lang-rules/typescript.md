@@ -15,6 +15,9 @@
 - [ ] `as const` used for literal type inference on constant data
 - [ ] Re-exporting types uses `export type` to avoid runtime module side effects
 - [ ] Index signatures (`[key: string]: T`) document their intent — not used as a catch-all escape
+- [ ] `// @ts-ignore` replaced with `// @ts-expect-error` which fails when the error is fixed
+- [ ] Utility types (`Pick<T, K>`, `Omit<T, K>`) used for API contract subsets — not manual re-definition
+- [ ] Union types narrowed with exhaustive checks (switch with `never` default) to catch missing cases at compile time
 
 ## TS 4.x
 
@@ -22,13 +25,8 @@
 - [ ] `infer` keyword in conditional types accompanied by a comment explaining the inference
 - [ ] Variadic tuple types (`[...T]`) used instead of manual overload chains where applicable
 - [ ] `noUncheckedIndexedAccess` enabled or array access guarded with bounds check
-
-## TS 4.x
-
-- [ ] Template literal types used for string-pattern constraints on API route strings or event names
-- [ ] `infer` keyword in conditional types accompanied by a comment explaining the inference
-- [ ] Variadic tuple types (`[...T]`) used instead of manual overload chains where applicable
-- [ ] `noUncheckedIndexedAccess` enabled or array access guarded with bounds check
+- [ ] Mapped types with `as` clause used for key remapping instead of manual type construction
+- [ ] `Awaited<T>` utility type used to unwrap Promise types instead of manual inference
 
 ## TS 5.x
 

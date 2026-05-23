@@ -154,10 +154,10 @@ class TestLangRulesFiles:
     EXPECTED_FILES = [
         "csharp", "javascript", "typescript", "react", "python",
         "java", "kotlin", "go", "rust", "cpp", "swift", "android",
-        "ruby", "php", "sql",
+        "ruby", "php", "sql", "css",
     ]
 
-    def test_all_15_rules_files_exist(self):
+    def test_all_16_rules_files_exist(self):
         lang_rules_dir = _commands / "lang-rules"
         for lang in self.EXPECTED_FILES:
             rules_file = lang_rules_dir / f"{lang}.md"
@@ -185,13 +185,13 @@ class TestLangRulesFiles:
             # Must have at least one ## heading (version section)
             assert "## " in content, f"{lang}.md has no version section headings"
 
-    def test_languages_yml_has_15_entries(self):
+    def test_languages_yml_has_16_entries(self):
         yml_path = _commands / "languages.yml"
         assert yml_path.is_file(), "commands/languages.yml not found"
         import yaml
         data = yaml.safe_load(yml_path.read_text(encoding="utf-8"))
         langs = data.get("languages", {})
-        assert len(langs) == 15, f"Expected 15 languages, got {len(langs)}"
+        assert len(langs) == 16, f"Expected 16 languages, got {len(langs)}"
 
     def test_languages_yml_entries_have_required_fields(self):
         yml_path = _commands / "languages.yml"
