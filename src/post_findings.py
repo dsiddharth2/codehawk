@@ -842,28 +842,7 @@ def _build_summary_markdown(
                 lines.append(f"- ➖ **{fv.cr_id}** — Not relevant: {fv.reason}")
         lines.append("")
 
-    # CI Gate
-    gate_passed = gate_result.get("passed", True)
-    gate_icon = "✅" if gate_passed else "🚨"
-    lines += [
-        "## 🚦 CI Gate",
-        f"{gate_icon} Gate: **{'PASSED' if gate_passed else 'FAILED'}**",
-        "",
-    ]
-    if gate_result.get("reasons"):
-        for reason in gate_result["reasons"]:
-            lines.append(f"- {reason}")
-        lines.append("")
-
-    # Next steps
-    lines += [
-        "## 🚀 Next Steps",
-        "1. Review the inline comments on specific files",
-        "2. Address critical and warning items",
-        "3. Consider implementing suggestions for code quality",
-        "4. Reply to any comments if you need clarification",
-        "",
-    ]
+    # CI Gate (internal use only — not shown in PR summary)
 
     # Overall summary — agent-generated narrative
     if getattr(findings_file, "summary", None):
@@ -1197,12 +1176,16 @@ def run(
     new_findings = [f for f in capped if f.id not in posted_cr_ids]
     deduped_count = len(capped) - len(new_findings)
 
-    # 8. Score
+    # 8. Score (apply mode multipliers so severity is consistent for scoring AND posting)
+    all_adjusted = capped
     if is_verify_only and findings_file.fix_verifications:
-        score = scorer.calculate_verify_score(findings_file.fix_verifications)
+        score = scorer.calculate_verify_score(findings_file.fix_verifications, findings_file.review_modes)
     else:
         all_adjusted = scorer.apply_mode_multipliers(capped, findings_file.review_modes)
         score = scorer.calculate_pr_score(all_adjusted)
+        # Rebuild new_findings from adjusted list so posted comments reflect adjusted severity
+        adjusted_by_id = {f.id: f for f in all_adjusted}
+        new_findings = [adjusted_by_id[f.id] for f in new_findings if f.id in adjusted_by_id]
 
     # 9. Post inline comments (skip entirely for verify-only)
     posted_count = 0
@@ -1292,7 +1275,7 @@ def run(
     # 13. Post/update summary
     summary_md = _build_summary_markdown(
         findings_file=findings_file,
-        filtered_findings=capped,
+        filtered_findings=all_adjusted if not is_verify_only else capped,
         score=score,
         gate_result=gate_result,
         fix_verifications=findings_file.fix_verifications,

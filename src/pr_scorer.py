@@ -259,11 +259,12 @@ class PRScorer:
             'good': statistics.get('good', 0)
         }
 
-    def calculate_verify_score(self, fix_verifications) -> PRScore:
+    def calculate_verify_score(self, fix_verifications, review_modes: List[str] = None) -> PRScore:
         """Calculate score for verify-only runs from prior findings' severity/category.
 
         Penalty = sum of penalties for all prior findings that are still_present.
         Fixed findings contribute zero penalty.
+        Applies the same mode multipliers as full reviews for consistency.
         """
         if not self.enable_scoring:
             return self._create_disabled_score()
@@ -273,9 +274,25 @@ class PRScorer:
         category_penalties: Dict[str, float] = {}
         stats: Dict[str, int] = {'critical': 0, 'warning': 0, 'suggestion': 0, 'good': 0}
 
+        modes = {m.lower() for m in (review_modes or [])}
+
         for fv in fix_verifications:
             sev = fv.severity or "warning"
             cat = fv.category or "best_practices"
+
+            # Apply the same mode multipliers used during full review
+            if 'migration' in modes:
+                sev = 'critical'
+            elif 'security' in modes and cat == 'security':
+                if sev == 'warning':
+                    sev = 'critical'
+            elif 'performance' in modes and cat == 'performance':
+                if sev == 'warning':
+                    sev = 'critical'
+            elif 'architecture' in modes and cat in ('best_practices', 'architecture'):
+                if sev == 'suggestion':
+                    sev = 'warning'
+
             issue_penalty = self._calculate_issue_penalty(sev, cat)
             original_penalty += issue_penalty
 
