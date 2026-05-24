@@ -39,6 +39,7 @@ python3 /app/src/run_agent.py \
     --model "$OPENAI_MODEL" \
     --prompt-file /app/commands/review-pr-core.md \
     --commit-id "${COMMIT_ID:-}" \
-    ${DRY_RUN_FLAG:-}
+    ${DRY_RUN_FLAG:-} \
+    "$@"
 
 echo "==> codehawk complete."
