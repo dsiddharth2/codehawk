@@ -29,24 +29,10 @@ logger = logging.getLogger("codehawk.test")
 
 MAX_TURNS_INTEGRATION = 40
 
-# Large PR
-#PR_ID = 6435
-#PR_ID = 6619
-
-#Small PR
-#PR_ID = 6629
-# REPO = "BluSKYFunctionApps"
-# ADO_ORG = "blub0x"
-# ADO_PROJECT = "BluSKY Git"
-
-#REPO = "AI Pipelines"
-#ADO_ORG = "blub0x"
-#ADO_PROJECT = "BluB0X AI"
-
-PR_ID = 6686
-REPO = "BluSKYFunctionApps"
-ADO_ORG = "blub0x"
-ADO_PROJECT = "BluSKY Git"
+PR_ID = int(os.environ.get("TEST_PR_ID", "1"))
+REPO = os.environ.get("TEST_REPO", "MyRepo")
+ADO_ORG = os.environ.get("TEST_ADO_ORG", "my-org")
+ADO_PROJECT = os.environ.get("TEST_ADO_PROJECT", "My Project")
 
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent

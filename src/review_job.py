@@ -191,6 +191,11 @@ class ReviewJob:
             except Exception as exc:
                 logger.debug("Previous findings fetch skipped: %s", exc)
 
+        # VERIFY_FIXES: lightweight path — no diffs, no graph, just the
+        # previous findings table + tools so the agent can investigate.
+        if self.config.review_mode == ReviewMode.VERIFY_FIXES:
+            return self._create_verify_findings()
+
         changed_files = []
         pr_details = None
         skipped_count = 0
@@ -254,6 +259,13 @@ class ReviewJob:
 
         two_pass_enabled = getattr(self.settings, "two_pass_enabled", True)
 
+        # VERIFY_FIXES mode must use single-pass — the two-pass scan/verify
+        # pipeline looks for NEW candidates, but verify-only needs the full
+        # prompt with previous findings + fix_verifications instructions.
+        if self.config.review_mode == ReviewMode.VERIFY_FIXES:
+            two_pass_enabled = False
+            logger.info("VERIFY_FIXES mode — forcing single-pass")
+
         if two_pass_enabled:
             try:
                 self._agent_result = self._run_two_pass(
@@ -287,6 +299,51 @@ class ReviewJob:
         self._write_findings(self._agent_result.findings_data)
 
         return self._findings_path
+
+    def _create_verify_findings(self) -> Path:
+        """Lightweight VERIFY_FIXES path — no diffs, no graph, just tools + prior findings."""
+        prompt = self._build_fix_verify_prompt()
+        logger.info("VERIFY_FIXES prompt: %d chars", len(prompt))
+
+        runner = OpenAIAgentRunner(
+            settings=self.settings,
+            workspace=self.config.workspace,
+            model=self.config.model,
+            pr_id=self.config.pr_id,
+            repo=self.config.repo,
+        )
+        self._agent_result = runner.run(prompt, max_turns=self.config.max_turns)
+
+        if not self._agent_result.findings_data:
+            import warnings
+            warnings.warn(
+                "Verify agent did not produce findings JSON; empty fix_verifications.",
+                stacklevel=2,
+            )
+
+        self._stamp_usage(self._agent_result)
+        self._write_findings(self._agent_result.findings_data)
+        return self._findings_path
+
+    def _build_fix_verify_prompt(self) -> str:
+        """Build a minimal prompt for VERIFY_FIXES — just the base instructions,
+        previous findings table, and verify-only constraints. No diffs injected."""
+        if self.config.prompt_text:
+            text = self.config.prompt_text
+        else:
+            text = self.config.prompt_path.read_text(encoding="utf-8")
+
+        ws_posix = str(self.config.workspace).replace("\\", "/")
+        text = text.replace("/workspace/", ws_posix + "/")
+        text = text.replace("$PR_ID", str(self.config.pr_id))
+        text = text.replace("$REPO", self.config.repo)
+        text = text.replace("$VCS", self.config.vcs)
+
+        if self.config.previous_findings:
+            text += self._build_previous_findings_section(self.config.previous_findings)
+
+        text += self._build_verify_only_instructions()
+        return text
 
     # ------------------------------------------------------------------
     # Phase 2 — score, gate, post comments
@@ -523,7 +580,21 @@ class ReviewJob:
             "- `findings[]` MUST be empty — do NOT add new findings\n"
             "- Populate `fix_verifications[]` for EVERY cr_id in the table above\n"
             "- Skip Steps 3-5 of the standard review process\n"
-            "- Each `fix_verifications` entry requires: `cr_id`, `status` (fixed/still_present/not_relevant), `reason`\n"
+            "- Each `fix_verifications` entry requires: `cr_id`, `status`, `reason`\n\n"
+            "### Status definitions (use EXACTLY these values)\n"
+            "- `fixed` — the issue described in the finding has been resolved "
+            "(code was changed, test was added, bug was fixed — the problem no longer exists)\n"
+            "- `still_present` — the issue still exists in the current code\n"
+            "- `not_relevant` — the file was deleted or the finding no longer applies "
+            "because the relevant code was entirely removed (NOT for issues that were fixed)\n\n"
+            "**IMPORTANT:** If a finding was addressed/fixed by the developer, use `fixed` — "
+            "do NOT use `not_relevant`. Reserve `not_relevant` only for deleted files or "
+            "removed code paths.\n\n"
+            "### How to verify\n"
+            "- Use `read_local_file` to read the current file contents from the workspace\n"
+            "- Use `search_code` to search for patterns across the codebase (e.g. test files)\n"
+            "- Do NOT use `get_file_content` or `get_file_diff` — the workspace is already cloned locally\n"
+            "- Do NOT call `get_pr` — all prior findings are in the table above\n"
         )
 
     def _build_check_new_instructions(self) -> str:
@@ -1328,6 +1399,20 @@ class ReviewJob:
         result.findings_data.setdefault("tool_calls", result.tool_calls_count)
         result.findings_data.setdefault("agent", "openai-api")
 
+    def _enrich_fix_verifications(self, data: dict):
+        """Stamp severity/category from previous_findings onto each fix_verification entry."""
+        prev = self.config.previous_findings or []
+        if not prev:
+            return
+        by_cr_id = {f.cr_id: f for f in prev if f.cr_id}
+        for fv in data.get("fix_verifications", []):
+            if not isinstance(fv, dict):
+                continue
+            prior = by_cr_id.get(fv.get("cr_id"))
+            if prior:
+                fv.setdefault("severity", prior.severity)
+                fv.setdefault("category", prior.category)
+
     def _write_findings(self, data: dict):
         data["pr_id"] = self.config.pr_id
         data["repo"] = self.config.repo
@@ -1339,6 +1424,7 @@ class ReviewJob:
             data["findings"] = []
             if "verify_fixes" not in review_modes:
                 review_modes.append("verify_fixes")
+            self._enrich_fix_verifications(data)
         elif self.config.review_mode == ReviewMode.CHECK_NEW:
             data["fix_verifications"] = []
             if "check_new" not in review_modes:
