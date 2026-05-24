@@ -15,7 +15,7 @@ from tools.registry import Tool, ToolRegistry
 def _resolve_workspace_path(workspace: Path, file_path: str) -> Path:
     """Resolve a file path safely within the workspace.
 
-    ADO file paths start with '/' (e.g. '/BluSKYFunctionApps/...').
+    ADO file paths start with '/' (e.g. '/MyRepo/...').
     On Windows, Path(workspace) / '/absolute' drops the workspace prefix.
     Strip the leading '/' so it joins correctly.
     """

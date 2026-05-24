@@ -15,8 +15,8 @@ import pytest
 import post_findings as pf
 
 
-PR_ID = 6571
-REPO = "BluSKYFunctionApps"
+PR_ID = 1
+REPO = "TestRepo"
 
 
 def _write_findings(tmp_path, findings, fix_verifications=None, review_modes=None):

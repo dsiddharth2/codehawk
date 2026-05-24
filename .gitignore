@@ -41,6 +41,10 @@ coverage/
 results/
 findings-output/
 
+# Live integration tests (contain org-specific config)
+tests/integration/test_e2e_review_then_verify.py
+tests/integration/test_fix_verification.py
+
 # Python
 __pycache__/
 *.pyc
