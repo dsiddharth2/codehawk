@@ -88,6 +88,12 @@ class BatchReviewJob:
             if previous_findings:
                 logger.info("Re-push detected: %d previous findings", len(previous_findings))
 
+        # --- Step 2d: Re-push → verify fixes only (cheap), skip full review ---
+        if previous_findings:
+            return self._run_verify_only(
+                previous_findings, dry_run=dry_run, commit_id=commit_id,
+            )
+
         # --- Step 3: Build graph once ---
         graph_store = self._build_graph(len(code_files))
 
@@ -190,6 +196,40 @@ class BatchReviewJob:
         except Exception as exc:
             logger.warning("PR pre-fetch failed: %s", exc)
             return None
+
+    _VERIFY_MODEL = "gpt-5-codex"
+    _VERIFY_MAX_TURNS = 5
+
+    def _run_verify_only(
+        self,
+        previous_findings: list,
+        dry_run: bool = False,
+        commit_id: str = "",
+    ) -> Dict[str, Any]:
+        """Run fix verification only (no full review). Cheap agent-based path for re-pushes.
+
+        Uses a ReviewJob in VERIFY_FIXES mode with gpt-4o-mini and a low turn
+        budget. The agent has tools (read_local_file, search_code) so it can
+        investigate cross-file fixes — unlike the deterministic fix_verifier.
+        """
+        logger.info(
+            "Running fix verification agent (%s, max_turns=%d) for %d prior findings",
+            self._VERIFY_MODEL, self._VERIFY_MAX_TURNS, len(previous_findings),
+        )
+
+        config = ReviewJobConfig(
+            pr_id=self.pr_id,
+            repo=self.repo,
+            workspace=self.workspace,
+            model=self._VERIFY_MODEL,
+            max_turns=self._VERIFY_MAX_TURNS,
+            prompt_path=self.prompt_path,
+            vcs=self.vcs,
+            previous_findings=previous_findings,
+            review_mode=ReviewMode.VERIFY_FIXES,
+        )
+        job = ReviewJob(config, settings=self.settings)
+        return job.run(dry_run=dry_run, commit_id=commit_id)
 
     def _fetch_previous_findings(self) -> list:
         """Fetch existing review threads with cr_id markers."""

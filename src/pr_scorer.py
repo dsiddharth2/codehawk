@@ -259,25 +259,59 @@ class PRScorer:
             'good': statistics.get('good', 0)
         }
 
-    def apply_coverage_penalty(self, score: PRScore, coverage_ratio: float) -> PRScore:
+    def calculate_verify_score(self, fix_verifications) -> PRScore:
+        """Calculate score for verify-only runs from prior findings' severity/category.
+
+        Penalty = sum of penalties for all prior findings that are still_present.
+        Fixed findings contribute zero penalty.
         """
-        Add a coverage penalty to an existing PRScore.
+        if not self.enable_scoring:
+            return self._create_disabled_score()
 
-        For coverage below 100%, adds: (1 - coverage_ratio) * 50 penalty points.
-        This ensures incomplete reviews score poorly even when the gate mode is 'log'.
+        total_penalty = 0.0
+        original_penalty = 0.0
+        category_penalties: Dict[str, float] = {}
+        stats: Dict[str, int] = {'critical': 0, 'warning': 0, 'suggestion': 0, 'good': 0}
 
-        Args:
-            score: Existing PRScore to augment.
-            coverage_ratio: Fraction of code files reviewed (0.0–1.0).
+        for fv in fix_verifications:
+            sev = fv.severity or "warning"
+            cat = fv.category or "best_practices"
+            issue_penalty = self._calculate_issue_penalty(sev, cat)
+            original_penalty += issue_penalty
 
-        Returns:
-            New PRScore with coverage penalty applied.
-        """
-        if coverage_ratio >= 1.0:
-            return score
-        penalty = round((1.0 - coverage_ratio) * 50.0, 1)
-        from dataclasses import replace
-        return replace(score, total_penalty=round(score.total_penalty + penalty, 1))
+            if fv.status == "still_present":
+                total_penalty += issue_penalty
+                category_penalties[cat] = category_penalties.get(cat, 0.0) + issue_penalty
+                stats[sev] = stats.get(sev, 0) + 1
+
+        category_penalties = {k: round(v, 1) for k, v in category_penalties.items() if v > 0}
+        total_penalty = round(total_penalty, 1)
+
+        overall_stars = self._penalty_to_stars(total_penalty)
+        quality_level = self._get_quality_level(total_penalty)
+        category_stars = {
+            cat: self._penalty_to_stars(p) for cat, p in category_penalties.items()
+        }
+
+        fixed_count = sum(1 for fv in fix_verifications if fv.status == "fixed")
+        total_count = len(fix_verifications)
+        breakdown = [
+            f"Original penalty: {original_penalty:.1f} points ({total_count} prior findings)",
+            f"Fixed: {fixed_count} findings (penalty removed)",
+            f"Still present: {total_count - fixed_count} findings",
+            f"Current penalty: {total_penalty:.1f} points",
+            f"Quality level: {quality_level}",
+        ]
+
+        return PRScore(
+            total_penalty=total_penalty,
+            overall_stars=overall_stars,
+            category_penalties=category_penalties,
+            category_stars=category_stars,
+            issues_by_severity=self._extract_severity_counts(stats),
+            scoring_breakdown=breakdown,
+            quality_level=quality_level,
+        )
 
     def _create_disabled_score(self) -> PRScore:
         return PRScore(

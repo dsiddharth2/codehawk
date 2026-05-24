@@ -277,31 +277,10 @@ class TestCoveragePenalty:
         }
         return PRScorer(penalty_matrix=matrix, star_thresholds=[0.0, 5.0, 15.0, 30.0, 50.0])
 
-    def test_full_coverage_no_penalty(self):
-        scorer = self._make_scorer()
-        from models.review_models import Finding
-        score = scorer.calculate_pr_score([])
-        penalized = scorer.apply_coverage_penalty(score, coverage_ratio=1.0)
-        assert penalized.total_penalty == score.total_penalty
-
-    def test_zero_coverage_adds_50_penalty(self):
+    def test_score_based_on_findings_only(self):
         scorer = self._make_scorer()
         score = scorer.calculate_pr_score([])
-        penalized = scorer.apply_coverage_penalty(score, coverage_ratio=0.0)
-        assert penalized.total_penalty == 50.0
-
-    def test_half_coverage_adds_25_penalty(self):
-        scorer = self._make_scorer()
-        score = scorer.calculate_pr_score([])
-        penalized = scorer.apply_coverage_penalty(score, coverage_ratio=0.5)
-        assert penalized.total_penalty == 25.0
-
-    def test_625_coverage_correct_penalty(self):
-        scorer = self._make_scorer()
-        score = scorer.calculate_pr_score([])
-        penalized = scorer.apply_coverage_penalty(score, coverage_ratio=0.625)
-        expected = round((1.0 - 0.625) * 50, 1)
-        assert penalized.total_penalty == expected
+        assert score.total_penalty == 0.0
 
 
 # ---------------------------------------------------------------------------

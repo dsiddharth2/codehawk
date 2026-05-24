@@ -221,6 +221,8 @@ class FixVerification:
     cr_id: str                       # matches a Finding.id from prior review
     status: str                      # "fixed" | "still_present" | "not_relevant"
     reason: str                      # human-readable explanation
+    severity: Optional[str] = None   # from original finding: "critical" | "warning" | "suggestion"
+    category: Optional[str] = None   # from original finding: "security" | "performance" | etc.
 
 
 @dataclass

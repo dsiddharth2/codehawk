@@ -288,6 +288,8 @@ def _parse_findings_file(data: dict):
                 cr_id=fv.get("cr_id", "unknown"),
                 status=fv.get("status", "not_relevant"),
                 reason=fv.get("reason", ""),
+                severity=fv.get("severity"),
+                category=fv.get("category"),
             ))
         except Exception as exc:
             logger.warning("Skipping unparseable fix_verification: %s", exc)
@@ -1195,9 +1197,12 @@ def run(
     new_findings = [f for f in capped if f.id not in posted_cr_ids]
     deduped_count = len(capped) - len(new_findings)
 
-    # 8. Score (use mode-adjusted findings)
-    all_adjusted = scorer.apply_mode_multipliers(capped, findings_file.review_modes)
-    score = scorer.calculate_pr_score(all_adjusted)
+    # 8. Score
+    if is_verify_only and findings_file.fix_verifications:
+        score = scorer.calculate_verify_score(findings_file.fix_verifications)
+    else:
+        all_adjusted = scorer.apply_mode_multipliers(capped, findings_file.review_modes)
+        score = scorer.calculate_pr_score(all_adjusted)
 
     # 9. Post inline comments (skip entirely for verify-only)
     posted_count = 0
@@ -1260,8 +1265,7 @@ def run(
         coverage_ratio = 1.0
     coverage_gate_mode = getattr(settings, "coverage_gate_mode", "hard") if settings else "hard"
 
-    # 11c. Apply coverage penalty to score (only when coverage tracking is active)
-    score = scorer.apply_coverage_penalty(score, coverage_ratio)
+    # 11c. Coverage is tracked for display but does not affect the penalty score
 
     # 12. Gate evaluation from .codereview.yml (verify-only always passes — no new findings)
     gate_config = _load_codereview_yml(workspace)
