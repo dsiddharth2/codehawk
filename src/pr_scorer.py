@@ -120,12 +120,13 @@ class PRScorer:
         modes = {m.lower() for m in review_modes}
         adjusted = []
 
+        migration_exempt = {'code_style', 'documentation', 'testing'}
+
         for f in findings:
             # Work on a copy to avoid mutating originals
             severity = f.severity
 
-            if 'migration' in modes:
-                # Migration mode: all findings treated as critical for gating
+            if 'migration' in modes and f.category not in migration_exempt:
                 severity = 'critical'
             elif 'security' in modes and f.category == 'security':
                 # Security mode doubles effective penalty — elevate warning→critical

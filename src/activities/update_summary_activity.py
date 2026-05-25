@@ -151,6 +151,12 @@ class UpdateSummaryActivity(BaseActivity[UpdateSummaryInput, UpdateSummaryResult
                 if thread.thread_context and thread.thread_context.file_path:
                     continue
 
+                props = getattr(thread, 'properties', None) or {}
+                summary_prop = props.get('CodeHawk.Summary')
+                if isinstance(summary_prop, dict) and summary_prop.get('$value') == 'true':
+                    self.logger.info(f"Found summary thread {thread.id} via property")
+                    return thread
+
                 if thread.comments and len(thread.comments) > 0:
                     content = thread.comments[0].content or ""
                     for marker in summary_markers:

@@ -34,7 +34,7 @@ This file is the authoritative reference for how findings are weighted into a PR
 | `documentation` | Missing or inaccurate docs, changelog gaps | Wrong docstring, missing `@param`, inaccurate README claim |
 | `testing` | Test coverage gaps identified from test gap analysis | Missing test for new public method, untested edge case, missing integration test |
 
-**Scoring note:** `code_style`, `documentation`, and `testing` categories have a default penalty of 0.0 (zero weight in the star rating) unless overridden in `.codereview.yml`. They are still posted as inline comments but do not affect the CI gate or star rating.
+**Scoring note:** All categories now carry penalty weight. `code_style` and `documentation` have lighter penalties (1.0/0.5/0.25) since they affect maintainability rather than correctness. `testing` penalties (1.5/0.75/0.25) match `error_handling` because test gaps represent real risk. All values can be overridden in `.codereview.yml`.
 
 ---
 
@@ -46,13 +46,13 @@ These are the default penalty points per finding. Values can be overridden via e
 |----------|----------|---------|------------|
 | `security` | **5.0** | 4.0 | 2.0 |
 | `performance` | **3.0** | 2.0 | 1.0 |
+| `architecture` | **3.0** | 2.0 | 1.0 |
 | `best_practices` | **2.0** | 1.0 | 0.5 |
-| `architecture` | **2.0** | 1.0 | 0.5 |
 | `correctness` | **2.0** | 1.0 | 0.5 |
 | `error_handling` | **1.5** | 0.75 | 0.25 |
-| `code_style` | 0.0 | 0.0 | 0.0 |
-| `documentation` | 0.0 | 0.0 | 0.0 |
-| `testing` | 0.0 | 0.0 | 0.0 |
+| `testing` | **1.5** | 0.75 | 0.25 |
+| `code_style` | **1.0** | 0.5 | 0.25 |
+| `documentation` | **1.0** | 0.5 | 0.25 |
 
 Penalty points accumulate additively. The total penalty maps to a star rating:
 
@@ -76,9 +76,11 @@ When a review mode is active, severity is escalated before scoring:
 | `security` | `security` | `warning` → `critical` (effective ×2 penalty) |
 | `performance` | `performance` | `warning` → `critical` (effective ×2 penalty) |
 | `architecture` | `best_practices` | `suggestion` → `warning` (effective ×1.5 penalty) |
-| `migration` | all | All findings → `critical` (maximum gating) |
+| `migration` | all except `code_style`, `documentation`, `testing` | Affected findings → `critical` (maximum gating) |
 
 Multipliers are applied by `post_findings.py` (`apply_mode_multipliers` in `pr_scorer.py`). The review agent does not apply multipliers — it assigns the base severity. The agent should calibrate severity knowing that mode multipliers will escalate where applicable.
+
+**Note:** Migration mode exempts `code_style`, `documentation`, and `testing` from escalation — an unused import or missing docstring is not a migration risk. Migration mode is also conditional: only activate it when the PR contains migration-related files (SQL migrations, schema changes, EF snapshots, etc.).
 
 ---
 

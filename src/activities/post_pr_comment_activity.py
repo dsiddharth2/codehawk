@@ -5,7 +5,7 @@ Posts comments to Azure DevOps pull requests including:
 - Line-specific thread comments on files
 - Overall summary comments on the PR
 
-Appends <!-- cr-id: {cr_id} --> markers to track findings across re-pushes.
+Stores cr-id markers via thread properties (ADO) to track findings across re-pushes.
 """
 
 from typing import List, Optional
@@ -167,7 +167,17 @@ class PostPRCommentActivity(BaseActivity[PostPRCommentInput, PostPRCommentResult
         self, pr_id: int, repository_id: str, project: str, comment_text: str
     ) -> int:
         comment = Comment(content=comment_text)
-        thread = CommentThread(comments=[comment], status=CommentThreadStatus.ACTIVE)
+        properties = {
+            "CodeHawk.Summary": {
+                "$type": "System.String",
+                "$value": "true"
+            }
+        }
+        thread = CommentThread(
+            comments=[comment],
+            status=CommentThreadStatus.ACTIVE,
+            properties=properties
+        )
         created_thread = self.git_client.create_thread(
             comment_thread=thread,
             repository_id=repository_id,
@@ -196,20 +206,27 @@ class PostPRCommentActivity(BaseActivity[PostPRCommentInput, PostPRCommentResult
         if not file_path.startswith('/'):
             file_path = '/' + file_path
 
-        # Inject cr-id marker if provided
-        if cr_id:
-            comment_text = f"{comment_text}\n\n<!-- cr-id: {cr_id} -->"
-
         comment = Comment(content=comment_text)
         thread_context = CommentThreadContext(
             file_path=file_path,
             right_file_start=CommentPosition(line=line_number, offset=1),
             right_file_end=CommentPosition(line=line_number, offset=1)
         )
+
+        properties = None
+        if cr_id:
+            properties = {
+                "CodeHawk.CrId": {
+                    "$type": "System.String",
+                    "$value": cr_id
+                }
+            }
+
         thread = CommentThread(
             comments=[comment],
             status=CommentThreadStatus.ACTIVE,
-            thread_context=thread_context
+            thread_context=thread_context,
+            properties=properties
         )
         created_thread = self.git_client.create_thread(
             comment_thread=thread,

@@ -64,11 +64,9 @@ Change analysis and blast radius are included in the prompt. Proceed to Step 3.
 
 ---
 
-## Step 3 — Review Modes (Always All)
+## Step 3 — Review Modes
 
-All review modes are always active. Apply every checklist and severity multiplier for every PR.
-
-**Active modes (always):**
+The following modes are **always active** for every PR:
 
 | Mode | Focus | Checklist |
 |------|-------|-----------|
@@ -76,11 +74,16 @@ All review modes are always active. Apply every checklist and severity multiplie
 | `security` | OWASP Top 10, auth, crypto, secrets, input validation | `commands/review-mode-security.md` |
 | `architecture` | API design, interfaces, coupling, separation of concerns | `commands/review-mode-architecture.md` |
 | `performance` | Queries, caching, N+1, memory, algorithmic complexity | `commands/review-mode-performance.md` |
-| `migration` | Schema changes, data migrations, backward compatibility | `commands/review-mode-migration.md` |
 
-Apply the checklists from each mode file listed above. All checklists are additive.
+The following mode is **conditional** — only activate when the PR contains migration-related files:
 
-Set `review_modes` in findings.json to `["standard", "security", "architecture", "performance", "migration"]`.
+| Mode | Focus | Checklist | Activation condition |
+|------|-------|-----------|---------------------|
+| `migration` | Schema changes, data migrations, backward compatibility | `commands/review-mode-migration.md` | PR contains SQL migration files, schema changes, EF migration snapshots, Flyway/Liquibase scripts, or Alembic versions |
+
+Apply the checklists from each active mode file. All checklists are additive.
+
+Set `review_modes` in findings.json to the list of modes you actually activated. Always include `["standard", "security", "architecture", "performance"]`. Add `"migration"` only if the PR contains migration-related files.
 
 ---
 
