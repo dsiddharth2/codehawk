@@ -40,6 +40,7 @@ def verify_fixes(
     settings: Optional[Settings] = None,
     dry_run: bool = False,
     model: str = "",
+    developer_replies: Optional[Dict[str, str]] = None,
 ) -> List[FixVerification]:
     """Verify whether prior findings have been fixed in the current HEAD.
 
@@ -73,6 +74,7 @@ def verify_fixes(
 
     results: List[FixVerification] = []
     files_needing_llm: List[Tuple[str, List[ExistingCommentThread]]] = []
+    dismissal_usage: Dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
 
     if diff_result is None:
         logger.info("Git diff unavailable — sending all %d files to LLM for verification",
@@ -93,21 +95,56 @@ def verify_fixes(
                     ))
             elif file_path not in modified_files and effective_path not in modified_files:
                 for f in file_findings:
-                    results.append(FixVerification(
-                        cr_id=f.cr_id or f"thread-{f.thread_id}",
-                        status="still_present",
-                        reason="File was not modified since the prior review — issue is still present.",
-                    ))
+                    cr_id = f.cr_id or f"thread-{f.thread_id}"
+                    dev_reply = (developer_replies or {}).get(cr_id)
+                    if dev_reply:
+                        dismissal, d_usage = _evaluate_dismissal(
+                            f, dev_reply, effective_path, workspace, model=model,
+                        )
+                        dismissal_usage["input_tokens"] += d_usage.get("input_tokens", 0)
+                        dismissal_usage["output_tokens"] += d_usage.get("output_tokens", 0)
+                        results.append(dismissal)
+                    else:
+                        results.append(FixVerification(
+                            cr_id=cr_id,
+                            status="still_present",
+                            reason="File was not modified since the prior review — issue is still present.",
+                        ))
             else:
                 files_needing_llm.append((effective_path, file_findings))
 
     total_usage: Dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
+    total_usage["input_tokens"] += dismissal_usage["input_tokens"]
+    total_usage["output_tokens"] += dismissal_usage["output_tokens"]
     if files_needing_llm:
         llm_results, total_usage = _verify_files_with_llm(
             files_needing_llm, workspace, settings, model=model,
             base_commit=old_commit,
         )
         results.extend(llm_results)
+
+    if developer_replies:
+        dismissed_count = 0
+        for i, result in enumerate(results):
+            if result.status != "still_present":
+                continue
+            dev_reply = developer_replies.get(result.cr_id)
+            if not dev_reply:
+                continue
+            finding = next((f for f in old_findings if (f.cr_id or f"thread-{f.thread_id}") == result.cr_id), None)
+            if not finding:
+                continue
+            file_path = finding.file_path.lstrip("/")
+            dismissal, dismissal_usage = _evaluate_dismissal(finding, dev_reply, file_path, workspace, model=model)
+            total_usage["input_tokens"] += dismissal_usage.get("input_tokens", 0)
+            total_usage["output_tokens"] += dismissal_usage.get("output_tokens", 0)
+            if dismissal.status == "dismissed":
+                results[i] = dismissal
+                dismissed_count += 1
+            else:
+                results[i] = dismissal
+        if dismissed_count:
+            logger.info("Accepted %d developer dismissals", dismissed_count)
 
     total_usage["total_tokens"] = total_usage["input_tokens"] + total_usage["output_tokens"]
     total_usage["model"] = model or "gpt-4o-mini"
@@ -224,6 +261,137 @@ def _read_file_content(file_path: str, workspace: Path) -> str:
     except Exception as exc:
         logger.warning("Could not read file %s: %s", file_path, exc)
     return ""
+
+
+def _extract_code_snippet(file_content: str, line_number: int, context: int = 30) -> str:
+    """Extract lines around the finding's line number."""
+    lines = file_content.splitlines()
+    start = max(0, line_number - context - 1)
+    end = min(len(lines), line_number + context)
+    numbered = [f"{i + start + 1:4d} | {l}" for i, l in enumerate(lines[start:end])]
+    return "\n".join(numbered)
+
+
+def _evaluate_dismissal(
+    finding: ExistingCommentThread,
+    developer_reply: str,
+    file_path: str,
+    workspace: Path,
+    model: str = "",
+) -> Tuple[FixVerification, Dict[str, int]]:
+    """Evaluate whether a developer's dismissal of a finding is technically valid.
+
+    Returns (verification_result, usage).
+    """
+    empty_usage: Dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
+    cr_id = finding.cr_id or f"thread-{finding.thread_id}"
+    file_content = _read_file_content(file_path, workspace)
+    if not file_content:
+        logger.warning("Cannot evaluate dismissal for %s — file not readable", cr_id)
+        return FixVerification(
+            cr_id=cr_id, status="still_present",
+            reason="File content could not be read — cannot evaluate dismissal.",
+        ), empty_usage
+
+    snippet = _extract_code_snippet(file_content, finding.line_number)
+    codereview_md = _read_codereview_md(workspace)
+    prompt = _build_dismissal_prompt(finding, developer_reply, file_path, snippet, codereview_md=codereview_md)
+    logger.info("Evaluating dismissal for %s: \"%s\"", cr_id, developer_reply[:80])
+
+    result, usage = _call_llm_for_verification(prompt, 1, model=model)
+    if not result or not isinstance(result, list) or not result[0]:
+        return FixVerification(
+            cr_id=cr_id, status="still_present",
+            reason="Dismissal evaluation failed — defaulting to still_present.",
+        ), usage
+
+    evaluation = result[0]
+    accepted = evaluation.get("accepted", False)
+    explanation = evaluation.get("explanation", "")
+    suggested_rule = evaluation.get("suggested_rule")
+
+    if accepted:
+        reason = f"Developer dismissal accepted: {explanation}"
+        if suggested_rule:
+            reason += f" | Suggested .codereview.md rule: {suggested_rule}"
+        return FixVerification(cr_id=cr_id, status="dismissed", reason=reason), usage
+
+    return FixVerification(
+        cr_id=cr_id, status="still_present",
+        reason=f"Developer dismissal rejected: {explanation}",
+    ), usage
+
+
+def _read_codereview_md(workspace: Path) -> str:
+    """Read .codereview.md from the workspace root if it exists."""
+    for name in (".codereview.md", "codereview.md"):
+        path = workspace / name
+        if path.exists():
+            try:
+                return path.read_text(encoding="utf-8", errors="replace")[:10_000]
+            except Exception:
+                pass
+    return ""
+
+
+def _build_dismissal_prompt(
+    finding: ExistingCommentThread,
+    thread_conversation: str,
+    file_path: str,
+    code_snippet: str,
+    codereview_md: str = "",
+) -> str:
+    ext = Path(file_path).suffix.lstrip(".")
+    lang = {"js": "javascript", "ts": "typescript", "cs": "csharp", "py": "python"}.get(ext, ext)
+
+    project_context = ""
+    if codereview_md:
+        project_context = f"""
+## Project Context (.codereview.md)
+{codereview_md}
+"""
+
+    return f"""You are evaluating whether a developer's response to a code review finding is reasonable.
+
+## Finding Metadata
+- CR ID: {finding.cr_id}
+- Severity: {finding.severity or "unknown"}
+- Category: {finding.category or "unknown"}
+- File: `{file_path}`, Line: {finding.line_number}
+{project_context}
+## Code (around the flagged line)
+```{lang}
+{code_snippet}
+```
+
+## Thread Conversation
+{thread_conversation}
+
+## Evaluation Guidelines
+You should give the developer the benefit of the doubt. Code review is collaborative,
+not adversarial. The developer knows their codebase better than the reviewer.
+
+ACCEPT if ANY of these apply:
+- The developer gives a plausible technical reason (language behavior, framework version, API design)
+- The developer explains it's an intentional design decision (even without deep technical proof)
+- The developer references project conventions, version constraints, or business requirements
+- The code context supports the developer's claim (the code works as they describe)
+- The finding is about style/convention and the developer prefers their approach
+
+REJECT only if:
+- No reason given at all (bare "Invalid", "Won't fix" with zero explanation)
+- The claim is clearly factually wrong AND you can prove it from the code
+- It's a security vulnerability and the developer doesn't address the actual risk
+
+Consider the FULL conversation — the developer may clarify in later replies.
+If the developer's reasoning is at least plausible, ACCEPT it.
+
+If accepted, suggest a one-line rule for .codereview.md to prevent this from being flagged again.
+
+Respond ONLY with JSON, no other text:
+{{"accepted": true, "explanation": "...", "suggested_rule": "..."}}
+or
+{{"accepted": false, "explanation": "...", "suggested_rule": null}}"""
 
 
 def _get_file_diff(file_path: str, workspace: Path, base_commit: str = "") -> str:
@@ -347,9 +515,11 @@ def _call_llm_for_verification(
         parsed = json.loads(raw)
         if isinstance(parsed, list):
             return parsed, usage
-        for v in parsed.values():
-            if isinstance(v, list):
-                return v, usage
+        if isinstance(parsed, dict):
+            for v in parsed.values():
+                if isinstance(v, list):
+                    return v, usage
+            return [parsed], usage
         return [], usage
     except Exception as exc:
         logger.warning("LLM verification call failed for model %s: %s", model, exc)

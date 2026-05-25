@@ -219,7 +219,7 @@ class Finding:
 class FixVerification:
     """Represents a fix verification result for a prior finding."""
     cr_id: str                       # matches a Finding.id from prior review
-    status: str                      # "fixed" | "still_present" | "not_relevant"
+    status: str                      # "fixed" | "still_present" | "not_relevant" | "dismissed"
     reason: str                      # human-readable explanation
     severity: Optional[str] = None   # from original finding: "critical" | "warning" | "suggestion"
     category: Optional[str] = None   # from original finding: "security" | "performance" | etc.

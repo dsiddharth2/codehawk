@@ -730,15 +730,18 @@ def _build_summary_markdown(
         fixed = sum(1 for fv in fix_verifications if fv.status == "fixed")
         still = sum(1 for fv in fix_verifications if fv.status == "still_present")
         not_relevant = sum(1 for fv in fix_verifications if fv.status == "not_relevant")
-        total_verified = fixed + still + not_relevant
-        fix_rate = (fixed / total_verified * 100) if total_verified > 0 else 0
+        dismissed = sum(1 for fv in fix_verifications if fv.status == "dismissed")
+        total_verified = fixed + still + not_relevant + dismissed
+        resolved = fixed + dismissed
+        fix_rate = (resolved / total_verified * 100) if total_verified > 0 else 0
         lines += [
             "",
             "## 🔧 Fix Summary",
             f"- ✅ **Issues Fixed:** {fixed} / {total_verified}",
+            f"- 💬 **Dismissals Accepted:** {dismissed} / {total_verified}" if dismissed else "",
             f"- ❌ **Still Present:** {still} / {total_verified}" if still else "",
             f"- ➖ **Not Relevant:** {not_relevant}" if not_relevant else "",
-            f"- **Fix Rate:** {fix_rate:.0f}%",
+            f"- **Resolution Rate:** {fix_rate:.0f}%",
             "",
         ]
         lines = [l for l in lines if l is not None and l != ""]
@@ -835,6 +838,8 @@ def _build_summary_markdown(
         for fv in fix_verifications:
             if fv.status == "fixed":
                 lines.append(f"- ✅ **{fv.cr_id}** — Fixed: {fv.reason}")
+            elif fv.status == "dismissed":
+                lines.append(f"- 💬 **{fv.cr_id}** — Dismissal accepted: {fv.reason}")
             elif fv.status == "still_present":
                 lines.append(f"- ❌ **{fv.cr_id}** — Still present: {fv.reason}")
             elif fv.status == "not_relevant":

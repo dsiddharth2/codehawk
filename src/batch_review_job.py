@@ -220,6 +220,8 @@ class BatchReviewJob:
             self._VERIFY_MODEL, len(previous_findings),
         )
 
+        developer_replies = self._fetch_developer_replies()
+
         verifications, usage = verify_fixes(
             old_findings=previous_findings,
             workspace=self.workspace,
@@ -229,9 +231,11 @@ class BatchReviewJob:
             model=self._VERIFY_MODEL,
             settings=self.settings,
             dry_run=True,
+            developer_replies=developer_replies,
         )
 
         fixed = sum(1 for v in verifications if v.status == "fixed")
+        dismissed = sum(1 for v in verifications if v.status == "dismissed")
         still = sum(1 for v in verifications if v.status == "still_present")
         na = sum(1 for v in verifications if v.status == "not_relevant")
         findings_data = {
@@ -239,7 +243,7 @@ class BatchReviewJob:
             "repo": self.repo,
             "vcs": self.vcs,
             "summary": (
-                f"Fix verification complete: {fixed} fixed, "
+                f"Fix verification complete: {fixed} fixed, {dismissed} dismissed, "
                 f"{still} still present, {na} not relevant "
                 f"(out of {len(verifications)} prior findings)."
             ),
@@ -267,6 +271,21 @@ class BatchReviewJob:
             workspace=str(self.workspace),
             commit_id=commit_id,
         )
+
+    def _fetch_developer_replies(self) -> dict:
+        """Fetch developer replies on CodeHawk threads."""
+        try:
+            from activities.fetch_pr_comments_activity import FetchPRCommentsActivity
+            activity = FetchPRCommentsActivity(settings=self.settings)
+            replies = activity.get_developer_replies(
+                pr_id=self.pr_id, repository_id=self.repo or None,
+            )
+            if replies:
+                logger.info("Found %d threads with developer replies", len(replies))
+            return replies
+        except Exception as exc:
+            logger.warning("Failed to fetch developer replies: %s", exc)
+            return {}
 
     def _fetch_previous_findings(self) -> list:
         """Fetch existing review threads with cr_id markers."""
