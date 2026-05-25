@@ -92,6 +92,7 @@ class BatchReviewJob:
         if previous_findings:
             return self._run_verify_only(
                 previous_findings, dry_run=dry_run, commit_id=commit_id,
+                target_commit=target_commit,
             )
 
         # --- Step 3: Build graph once ---
@@ -198,38 +199,74 @@ class BatchReviewJob:
             return None
 
     _VERIFY_MODEL = "gpt-5-codex"
-    _VERIFY_MAX_TURNS = 5
 
     def _run_verify_only(
         self,
         previous_findings: list,
         dry_run: bool = False,
         commit_id: str = "",
+        target_commit: str = "",
     ) -> Dict[str, Any]:
-        """Run fix verification only (no full review). Cheap agent-based path for re-pushes.
+        """Run fix verification using deterministic per-file LLM calls.
 
-        Uses a ReviewJob in VERIFY_FIXES mode with gpt-4o-mini and a low turn
-        budget. The agent has tools (read_local_file, search_code) so it can
-        investigate cross-file fixes — unlike the deterministic fix_verifier.
+        Groups findings by file, runs one LLM call per modified file with
+        the current content + git diff. No agent loop, no sliding window —
+        every finding is guaranteed to be checked.
         """
+        from fix_verifier import verify_fixes
+
         logger.info(
-            "Running fix verification agent (%s, max_turns=%d) for %d prior findings",
-            self._VERIFY_MODEL, self._VERIFY_MAX_TURNS, len(previous_findings),
+            "Running deterministic fix verification (%s) for %d prior findings",
+            self._VERIFY_MODEL, len(previous_findings),
         )
 
-        config = ReviewJobConfig(
-            pr_id=self.pr_id,
-            repo=self.repo,
+        verifications, usage = verify_fixes(
+            old_findings=previous_findings,
             workspace=self.workspace,
+            pr_id=self.pr_id,
+            repo=self.repo or "",
+            old_commit=target_commit,
             model=self._VERIFY_MODEL,
-            max_turns=self._VERIFY_MAX_TURNS,
-            prompt_path=self.prompt_path,
-            vcs=self.vcs,
-            previous_findings=previous_findings,
-            review_mode=ReviewMode.VERIFY_FIXES,
+            settings=self.settings,
+            dry_run=True,
         )
-        job = ReviewJob(config, settings=self.settings)
-        return job.run(dry_run=dry_run, commit_id=commit_id)
+
+        fixed = sum(1 for v in verifications if v.status == "fixed")
+        still = sum(1 for v in verifications if v.status == "still_present")
+        na = sum(1 for v in verifications if v.status == "not_relevant")
+        findings_data = {
+            "pr_id": self.pr_id,
+            "repo": self.repo,
+            "vcs": self.vcs,
+            "summary": (
+                f"Fix verification complete: {fixed} fixed, "
+                f"{still} still present, {na} not relevant "
+                f"(out of {len(verifications)} prior findings)."
+            ),
+            "review_modes": ["verify_fixes"],
+            "agent": "codex",
+            "findings": [],
+            "fix_verifications": [
+                {"cr_id": v.cr_id, "status": v.status, "reason": v.reason}
+                for v in verifications
+            ],
+            "usage": usage,
+        }
+
+        findings_path = self.workspace / ".cr" / "findings.json"
+        findings_path.parent.mkdir(parents=True, exist_ok=True)
+        findings_path.write_text(json.dumps(findings_data, indent=2), encoding="utf-8")
+        logger.info(
+            "Wrote fix verification results: %d verifications", len(verifications),
+        )
+
+        import post_findings as pf
+        return pf.run(
+            findings_path=str(findings_path),
+            dry_run=dry_run,
+            workspace=str(self.workspace),
+            commit_id=commit_id,
+        )
 
     def _fetch_previous_findings(self) -> list:
         """Fetch existing review threads with cr_id markers."""
