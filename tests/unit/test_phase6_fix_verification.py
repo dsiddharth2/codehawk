@@ -98,20 +98,17 @@ class TestGetFileStatuses:
         assert renamed.get("old/path/File.cs") == "new/path/File.cs"
         assert "new/path/File.cs" in modified
 
-    def test_empty_old_commit_returns_empty_sets(self):
-        deleted, renamed, modified = fv._get_file_statuses(Path("/workspace"), "", "HEAD")
-        assert not deleted
-        assert not renamed
-        assert not modified
+    def test_empty_old_commit_returns_none(self):
+        result = fv._get_file_statuses(Path("/workspace"), "", "HEAD")
+        assert result is None
 
-    def test_git_failure_returns_empty_sets(self):
+    def test_git_failure_returns_none(self):
         with patch("fix_verifier.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="fatal error")
-            deleted, renamed, modified = fv._get_file_statuses(
+            result = fv._get_file_statuses(
                 Path("/workspace"), "abc123", "HEAD"
             )
-        assert not deleted
-        assert not modified
+        assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +127,7 @@ class TestVerifyFixesDeterministic:
             _make_thread(2, "src/auth/Login.cs", cr_id="cr-002"),
         ]
         with self._patch_git("D\tsrc/auth/Login.cs"):
-            results = fv.verify_fixes(
+            results, _usage = fv.verify_fixes(
                 old_findings=threads,
                 workspace=Path("/workspace"),
                 pr_id=1,
@@ -149,7 +146,7 @@ class TestVerifyFixesDeterministic:
         # git diff returns only a different file — Helper.cs not in diff
         with self._patch_git("M\tsrc/other/File.cs"):
             with patch("fix_verifier._call_llm_for_verification") as mock_llm:
-                results = fv.verify_fixes(
+                results, _usage = fv.verify_fixes(
                     old_findings=threads,
                     workspace=Path("/workspace"),
                     pr_id=1,
@@ -183,6 +180,8 @@ class TestVerifyFixesLLM:
         mock_run.return_value = MagicMock(returncode=0, stdout=stdout, stderr="")
         return patch("fix_verifier.subprocess.run", mock_run)
 
+    _MOCK_USAGE = {"input_tokens": 100, "output_tokens": 50}
+
     def test_modified_file_3_findings_one_llm_call(self):
         threads = [
             _make_thread(1, "src/api/Controller.cs", cr_id="cr-001"),
@@ -196,8 +195,9 @@ class TestVerifyFixesLLM:
         ]
         with self._patch_git_modified("src/api/Controller.cs"):
             with patch("fix_verifier._read_file_content", return_value="class Ctrl {}"):
-                with patch("fix_verifier._call_llm_for_verification", return_value=llm_response) as mock_llm:
-                    results = fv.verify_fixes(
+                with patch("fix_verifier._call_llm_for_verification",
+                           return_value=(llm_response, self._MOCK_USAGE)) as mock_llm:
+                    results, _usage = fv.verify_fixes(
                         old_findings=threads,
                         workspace=Path("/workspace"),
                         pr_id=1,
@@ -218,7 +218,8 @@ class TestVerifyFixesLLM:
         with self._patch_git_modified(*file_paths):
             with patch("fix_verifier._read_file_content", return_value="class X {}"):
                 with patch("fix_verifier._call_llm_for_verification",
-                           return_value=[{"finding": 1, "status": "fixed", "reason": "ok"}]) as mock_llm:
+                           return_value=([{"finding": 1, "status": "fixed", "reason": "ok"}],
+                                         self._MOCK_USAGE)) as mock_llm:
                     fv.verify_fixes(
                         old_findings=threads,
                         workspace=Path("/workspace"),
@@ -230,13 +231,14 @@ class TestVerifyFixesLLM:
         assert mock_llm.call_count == 5
 
     def test_20_modified_files_respects_cap(self):
-        """First 15 files get individual calls; remaining 5 also get individual calls (overflow)."""
+        """All 20 files get individual calls."""
         file_paths = [f"src/file{i}.cs" for i in range(20)]
         threads = [_make_thread(i + 1, fp, cr_id=f"cr-{i+1:03d}") for i, fp in enumerate(file_paths)]
         with self._patch_git_modified(*file_paths):
             with patch("fix_verifier._read_file_content", return_value="class X {}"):
                 with patch("fix_verifier._call_llm_for_verification",
-                           return_value=[{"finding": 1, "status": "fixed", "reason": "ok"}]) as mock_llm:
+                           return_value=([{"finding": 1, "status": "fixed", "reason": "ok"}],
+                                         self._MOCK_USAGE)) as mock_llm:
                     fv.verify_fixes(
                         old_findings=threads,
                         workspace=Path("/workspace"),
@@ -245,15 +247,15 @@ class TestVerifyFixesLLM:
                         old_commit="abc123",
                         dry_run=True,
                     )
-        # 15 individual + 5 overflow (1 per file) = 20 calls total
         assert mock_llm.call_count == 20
 
     def test_llm_failure_defaults_to_still_present(self):
         threads = [_make_thread(1, "src/api/Login.cs", cr_id="cr-001")]
         with self._patch_git_modified("src/api/Login.cs"):
             with patch("fix_verifier._read_file_content", return_value="class X {}"):
-                with patch("fix_verifier._call_llm_for_verification", return_value=[]):
-                    results = fv.verify_fixes(
+                with patch("fix_verifier._call_llm_for_verification",
+                           return_value=([], self._MOCK_USAGE)):
+                    results, _usage = fv.verify_fixes(
                         old_findings=threads,
                         workspace=Path("/workspace"),
                         pr_id=1,
@@ -267,8 +269,9 @@ class TestVerifyFixesLLM:
         threads = [_make_thread(1, "src/api/Login.cs", cr_id="cr-001")]
         with self._patch_git_modified("src/api/Login.cs"):
             with patch("fix_verifier._read_file_content", return_value="class X {}"):
-                with patch("fix_verifier._call_llm_for_verification", return_value=None):
-                    results = fv.verify_fixes(
+                with patch("fix_verifier._call_llm_for_verification",
+                           return_value=(None, self._MOCK_USAGE)):
+                    results, _usage = fv.verify_fixes(
                         old_findings=threads,
                         workspace=Path("/workspace"),
                         pr_id=1,
@@ -276,7 +279,6 @@ class TestVerifyFixesLLM:
                         old_commit="abc123",
                         dry_run=True,
                     )
-        # _call_llm_for_verification returning None is handled by _map_llm_results
         assert results[0].status == "still_present"
 
     def test_unreadable_file_defaults_to_still_present(self):
@@ -284,7 +286,7 @@ class TestVerifyFixesLLM:
         with self._patch_git_modified("src/api/Login.cs"):
             with patch("fix_verifier._read_file_content", return_value=""):
                 with patch("fix_verifier._call_llm_for_verification") as mock_llm:
-                    results = fv.verify_fixes(
+                    results, _usage = fv.verify_fixes(
                         old_findings=threads,
                         workspace=Path("/workspace"),
                         pr_id=1,

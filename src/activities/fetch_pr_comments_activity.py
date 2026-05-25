@@ -20,6 +20,14 @@ from config import Settings, get_settings
 class FetchPRCommentsActivity(BaseActivity[int, List[ExistingCommentThread]]):
     """Activity to fetch existing PR comment threads from Azure DevOps."""
 
+    _CODEHAWK_PATTERNS = (
+        '## 🔴', '## ⚠️', '## 💡',
+        '# 🤖 AI Code Review', '# 🔍 AI Code Review', '# 🔄 AI Code Re-Review',
+        '**Issue Fixed**', '**Still present**',
+        '✅ **Accepted**', '❌ **Finding stands**',
+        '✅ **Dismissal accepted**',
+    )
+
     def __init__(self, settings: Settings = None):
         super().__init__()
         self.settings = settings or get_settings()
@@ -220,3 +228,67 @@ class FetchPRCommentsActivity(BaseActivity[int, List[ExistingCommentThread]]):
             self.logger.warning(f"Failed to parse comment markdown: {e}")
 
         return result
+
+    def get_developer_replies(
+        self, pr_id: int, repository_id: Optional[str] = None,
+    ) -> dict[str, str]:
+        """Fetch full conversation thread for each CodeHawk thread with developer replies.
+
+        Returns {cr_id: formatted_conversation} where the conversation includes
+        all comments labeled as [CodeHawk] or [Developer Name].
+        Only includes threads where at least one developer reply exists.
+        """
+        repo_id = repository_id or self.settings.azure_devops_repo
+        project = self.settings.azure_devops_project
+
+        try:
+            threads = self.git_client.get_threads(
+                repository_id=repo_id,
+                pull_request_id=pr_id,
+                project=project,
+            )
+        except Exception as e:
+            self.logger.warning("Failed to fetch threads for developer replies: %s", e)
+            return {}
+
+        replies: dict[str, str] = {}
+        for thread in threads:
+            if not thread.comments or len(thread.comments) < 2:
+                continue
+
+            cr_id = self._extract_cr_id_from_properties(thread) or self._extract_cr_id(
+                thread.comments[0].content or ""
+            )
+            if not cr_id:
+                continue
+
+            has_developer_reply = False
+            conversation_lines: list[str] = []
+
+            for comment in thread.comments:
+                content = (comment.content or "").strip()
+                if not content:
+                    continue
+                author = getattr(comment, "author", None)
+                author_unique = getattr(author, "unique_name", "") or ""
+                author_display = getattr(author, "display_name", "Unknown") or "Unknown"
+
+                if self._is_codehawk_comment(content, author_unique):
+                    conversation_lines.append(f"[CodeHawk] {content}")
+                else:
+                    conversation_lines.append(f"[{author_display}] {content}")
+                    has_developer_reply = True
+
+            if has_developer_reply:
+                replies[cr_id] = "\n\n".join(conversation_lines)
+
+        self.logger.info(
+            "Developer replies: %d threads with replies out of %d total",
+            len(replies), len(threads),
+        )
+        return replies
+
+    def _is_codehawk_comment(self, content: str, author_unique_name: str) -> bool:
+        if not author_unique_name:
+            return True
+        return any(content.startswith(p) for p in self._CODEHAWK_PATTERNS)

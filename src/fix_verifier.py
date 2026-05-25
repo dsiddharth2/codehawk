@@ -39,6 +39,8 @@ def verify_fixes(
     graph_store: Any = None,
     settings: Optional[Settings] = None,
     dry_run: bool = False,
+    model: str = "",
+    developer_replies: Optional[Dict[str, str]] = None,
 ) -> List[FixVerification]:
     """Verify whether prior findings have been fixed in the current HEAD.
 
@@ -52,6 +54,7 @@ def verify_fixes(
         graph_store: Optional graph store for blast-radius notes.
         settings: App settings (uses default if None).
         dry_run: If True, skip posting to ADO.
+        model: LLM model for verification (default: gpt-4o-mini).
 
     Returns:
         List of FixVerification results, one per finding.
@@ -62,9 +65,7 @@ def verify_fixes(
     settings = settings or get_settings()
     workspace = Path(workspace)
 
-    deleted_files, renamed_map, modified_files = _get_file_statuses(
-        workspace, old_commit, new_commit
-    )
+    diff_result = _get_file_statuses(workspace, old_commit, new_commit)
 
     findings_by_file: Dict[str, List[ExistingCommentThread]] = {}
     for finding in old_findings:
@@ -73,31 +74,81 @@ def verify_fixes(
 
     results: List[FixVerification] = []
     files_needing_llm: List[Tuple[str, List[ExistingCommentThread]]] = []
+    dismissal_usage: Dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
 
-    for file_path, file_findings in findings_by_file.items():
-        effective_path = renamed_map.get(file_path, file_path)
+    if diff_result is None:
+        logger.info("Git diff unavailable — sending all %d files to LLM for verification",
+                     len(findings_by_file))
+        for file_path, file_findings in findings_by_file.items():
+            files_needing_llm.append((file_path, file_findings))
+    else:
+        deleted_files, renamed_map, modified_files = diff_result
+        for file_path, file_findings in findings_by_file.items():
+            effective_path = renamed_map.get(file_path, file_path)
 
-        if file_path in deleted_files or effective_path in deleted_files:
-            for f in file_findings:
-                results.append(FixVerification(
-                    cr_id=f.cr_id or f"thread-{f.thread_id}",
-                    status="not_relevant",
-                    reason="File was deleted or removed from the repository.",
-                ))
-        elif file_path not in modified_files and effective_path not in modified_files:
-            # File not in diff — unchanged since last review
-            for f in file_findings:
-                results.append(FixVerification(
-                    cr_id=f.cr_id or f"thread-{f.thread_id}",
-                    status="still_present",
-                    reason="File was not modified since the prior review — issue is still present.",
-                ))
-        else:
-            files_needing_llm.append((effective_path, file_findings))
+            if file_path in deleted_files or effective_path in deleted_files:
+                for f in file_findings:
+                    results.append(FixVerification(
+                        cr_id=f.cr_id or f"thread-{f.thread_id}",
+                        status="not_relevant",
+                        reason="File was deleted or removed from the repository.",
+                    ))
+            elif file_path not in modified_files and effective_path not in modified_files:
+                for f in file_findings:
+                    cr_id = f.cr_id or f"thread-{f.thread_id}"
+                    dev_reply = (developer_replies or {}).get(cr_id)
+                    if dev_reply:
+                        dismissal, d_usage = _evaluate_dismissal(
+                            f, dev_reply, effective_path, workspace, model=model,
+                        )
+                        dismissal_usage["input_tokens"] += d_usage.get("input_tokens", 0)
+                        dismissal_usage["output_tokens"] += d_usage.get("output_tokens", 0)
+                        results.append(dismissal)
+                    else:
+                        results.append(FixVerification(
+                            cr_id=cr_id,
+                            status="still_present",
+                            reason="File was not modified since the prior review — issue is still present.",
+                        ))
+            else:
+                files_needing_llm.append((effective_path, file_findings))
 
+    total_usage: Dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
+    total_usage["input_tokens"] += dismissal_usage["input_tokens"]
+    total_usage["output_tokens"] += dismissal_usage["output_tokens"]
     if files_needing_llm:
-        llm_results = _verify_files_with_llm(files_needing_llm, workspace, settings)
+        llm_results, total_usage = _verify_files_with_llm(
+            files_needing_llm, workspace, settings, model=model,
+            base_commit=old_commit,
+        )
         results.extend(llm_results)
+
+    if developer_replies:
+        dismissed_count = 0
+        for i, result in enumerate(results):
+            if result.status != "still_present":
+                continue
+            dev_reply = developer_replies.get(result.cr_id)
+            if not dev_reply:
+                continue
+            finding = next((f for f in old_findings if (f.cr_id or f"thread-{f.thread_id}") == result.cr_id), None)
+            if not finding:
+                continue
+            file_path = finding.file_path.lstrip("/")
+            dismissal, dismissal_usage = _evaluate_dismissal(finding, dev_reply, file_path, workspace, model=model)
+            total_usage["input_tokens"] += dismissal_usage.get("input_tokens", 0)
+            total_usage["output_tokens"] += dismissal_usage.get("output_tokens", 0)
+            if dismissal.status == "dismissed":
+                results[i] = dismissal
+                dismissed_count += 1
+            else:
+                results[i] = dismissal
+        if dismissed_count:
+            logger.info("Accepted %d developer dismissals", dismissed_count)
+
+    total_usage["total_tokens"] = total_usage["input_tokens"] + total_usage["output_tokens"]
+    total_usage["model"] = model or "gpt-4o-mini"
+    logger.info("Verification usage: %s", total_usage)
 
     if graph_store is not None:
         _annotate_blast_radius(results, old_findings, graph_store)
@@ -105,27 +156,26 @@ def verify_fixes(
     if not dry_run:
         _post_results_to_ado(results, old_findings, pr_id, repo, settings)
 
-    return results
+    return results, total_usage
 
 
 def _get_file_statuses(
     workspace: Path,
     old_commit: str,
     new_commit: str,
-) -> Tuple[set, Dict[str, str], set]:
+) -> Optional[Tuple[set, Dict[str, str], set]]:
     """Run git diff --name-status and parse into deleted/renamed/modified sets.
 
-    Returns:
-        deleted_files: Set of deleted file paths.
-        renamed_map: Dict mapping old path to new path for renames.
-        modified_files: Set of modified or added file paths.
+    Returns None if the diff cannot be computed (missing commit, shallow clone, etc.).
+    Otherwise returns (deleted_files, renamed_map, modified_files).
     """
     deleted: set = set()
     renamed: Dict[str, str] = {}
     modified: set = set()
 
     if not old_commit:
-        return deleted, renamed, modified
+        logger.warning("No old_commit provided — skipping git diff, will verify all files")
+        return None
 
     try:
         result = subprocess.run(
@@ -136,8 +186,8 @@ def _get_file_statuses(
             timeout=30,
         )
         if result.returncode != 0:
-            logger.warning("git diff --name-status failed: %s", result.stderr)
-            return deleted, renamed, modified
+            logger.warning("git diff --name-status failed: %s — will verify all files", result.stderr.strip())
+            return None
 
         for line in result.stdout.splitlines():
             parts = line.strip().split("\t")
@@ -152,7 +202,8 @@ def _get_file_statuses(
             elif status.startswith(("M", "A", "C")) and len(parts) >= 2:
                 modified.add(parts[1])
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-        logger.warning("Could not run git diff --name-status: %s", exc)
+        logger.warning("Could not run git diff --name-status: %s — will verify all files", exc)
+        return None
 
     return deleted, renamed, modified
 
@@ -161,35 +212,200 @@ def _verify_files_with_llm(
     files_needing_llm: List[Tuple[str, List[ExistingCommentThread]]],
     workspace: Path,
     settings: Settings,
-) -> List[FixVerification]:
-    """Verify modified files via LLM — individual calls up to cap, then batched.
+    model: str = "",
+    base_commit: str = "",
+) -> Tuple[List[FixVerification], Dict[str, int]]:
+    """Verify modified files via LLM — one call per file, all findings for that file.
 
-    First _INDIVIDUAL_FILE_CAP files each get their own call.
-    Overflow files are called _BATCH_FILE_SIZE at a time (each file still one call).
+    Returns (verifications, total_usage).
     """
     results: List[FixVerification] = []
-    individual = files_needing_llm[:_INDIVIDUAL_FILE_CAP]
-    overflow = files_needing_llm[_INDIVIDUAL_FILE_CAP:]
+    total_usage: Dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
+    for file_path, file_findings in files_needing_llm:
+        file_result = _verify_single_file(
+            file_path, file_findings, workspace, settings,
+            model=model, base_commit=base_commit,
+        )
+        if isinstance(file_result, tuple):
+            verifications, usage = file_result
+            results.extend(verifications)
+            total_usage["input_tokens"] += usage.get("input_tokens", 0)
+            total_usage["output_tokens"] += usage.get("output_tokens", 0)
+        else:
+            results.extend(file_result)
+    return results, total_usage
 
-    for file_path, file_findings in individual:
-        results.extend(_verify_single_file(file_path, file_findings, workspace, settings))
 
-    for i in range(0, len(overflow), _BATCH_FILE_SIZE):
-        batch = overflow[i : i + _BATCH_FILE_SIZE]
-        for file_path, file_findings in batch:
-            results.extend(_verify_single_file(file_path, file_findings, workspace, settings))
-
-    return results
+_FILE_CONTENT_CAP = 50_000
 
 
 def _read_file_content(file_path: str, workspace: Path) -> str:
-    """Read current file content from workspace. Returns empty string on failure."""
+    """Read current file content from workspace. Tries direct path, then glob fallback."""
     try:
         full_path = workspace / file_path
         if full_path.exists():
             return full_path.read_text(encoding="utf-8", errors="replace")
+
+        basename = Path(file_path).name
+        matches = list(workspace.rglob(basename))
+        if len(matches) == 1:
+            logger.info("Path fallback: %s -> %s", file_path, matches[0].relative_to(workspace))
+            return matches[0].read_text(encoding="utf-8", errors="replace")
+        elif len(matches) > 1:
+            for m in matches:
+                if file_path.replace("\\", "/") in str(m.relative_to(workspace)).replace("\\", "/"):
+                    logger.info("Path fallback (partial match): %s -> %s", file_path, m.relative_to(workspace))
+                    return m.read_text(encoding="utf-8", errors="replace")
+
+        logger.warning("File not found: %s (tried %s, glob found %d matches)", file_path, full_path, len(matches))
     except Exception as exc:
         logger.warning("Could not read file %s: %s", file_path, exc)
+    return ""
+
+
+def _extract_code_snippet(file_content: str, line_number: int, context: int = 30) -> str:
+    """Extract lines around the finding's line number."""
+    lines = file_content.splitlines()
+    start = max(0, line_number - context - 1)
+    end = min(len(lines), line_number + context)
+    numbered = [f"{i + start + 1:4d} | {l}" for i, l in enumerate(lines[start:end])]
+    return "\n".join(numbered)
+
+
+def _evaluate_dismissal(
+    finding: ExistingCommentThread,
+    developer_reply: str,
+    file_path: str,
+    workspace: Path,
+    model: str = "",
+) -> Tuple[FixVerification, Dict[str, int]]:
+    """Evaluate whether a developer's dismissal of a finding is technically valid.
+
+    Returns (verification_result, usage).
+    """
+    empty_usage: Dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
+    cr_id = finding.cr_id or f"thread-{finding.thread_id}"
+    file_content = _read_file_content(file_path, workspace)
+    if not file_content:
+        logger.warning("Cannot evaluate dismissal for %s — file not readable", cr_id)
+        return FixVerification(
+            cr_id=cr_id, status="still_present",
+            reason="File content could not be read — cannot evaluate dismissal.",
+        ), empty_usage
+
+    snippet = _extract_code_snippet(file_content, finding.line_number)
+    codereview_md = _read_codereview_md(workspace)
+    prompt = _build_dismissal_prompt(finding, developer_reply, file_path, snippet, codereview_md=codereview_md)
+    logger.info("Evaluating dismissal for %s: \"%s\"", cr_id, developer_reply[:80])
+
+    result, usage = _call_llm_for_verification(prompt, 1, model=model)
+    if not result or not isinstance(result, list) or not result[0]:
+        return FixVerification(
+            cr_id=cr_id, status="still_present",
+            reason="Dismissal evaluation failed — defaulting to still_present.",
+        ), usage
+
+    evaluation = result[0]
+    accepted = evaluation.get("accepted", False)
+    explanation = evaluation.get("explanation", "")
+    suggested_rule = evaluation.get("suggested_rule")
+
+    if accepted:
+        reason = f"Developer dismissal accepted: {explanation}"
+        if suggested_rule:
+            reason += f" | Suggested .codereview.md rule: {suggested_rule}"
+        return FixVerification(cr_id=cr_id, status="dismissed", reason=reason), usage
+
+    return FixVerification(
+        cr_id=cr_id, status="still_present",
+        reason=f"Developer dismissal rejected: {explanation}",
+    ), usage
+
+
+def _read_codereview_md(workspace: Path) -> str:
+    """Read .codereview.md from the workspace root if it exists."""
+    for name in (".codereview.md", "codereview.md"):
+        path = workspace / name
+        if path.exists():
+            try:
+                return path.read_text(encoding="utf-8", errors="replace")[:10_000]
+            except Exception:
+                pass
+    return ""
+
+
+def _build_dismissal_prompt(
+    finding: ExistingCommentThread,
+    thread_conversation: str,
+    file_path: str,
+    code_snippet: str,
+    codereview_md: str = "",
+) -> str:
+    ext = Path(file_path).suffix.lstrip(".")
+    lang = {"js": "javascript", "ts": "typescript", "cs": "csharp", "py": "python"}.get(ext, ext)
+
+    project_context = ""
+    if codereview_md:
+        project_context = f"""
+## Project Context (.codereview.md)
+{codereview_md}
+"""
+
+    return f"""You are evaluating whether a developer's response to a code review finding is reasonable.
+
+## Finding Metadata
+- CR ID: {finding.cr_id}
+- Severity: {finding.severity or "unknown"}
+- Category: {finding.category or "unknown"}
+- File: `{file_path}`, Line: {finding.line_number}
+{project_context}
+## Code (around the flagged line)
+```{lang}
+{code_snippet}
+```
+
+## Thread Conversation
+{thread_conversation}
+
+## Evaluation Guidelines
+You should give the developer the benefit of the doubt. Code review is collaborative,
+not adversarial. The developer knows their codebase better than the reviewer.
+
+ACCEPT if ANY of these apply:
+- The developer gives a plausible technical reason (language behavior, framework version, API design)
+- The developer explains it's an intentional design decision (even without deep technical proof)
+- The developer references project conventions, version constraints, or business requirements
+- The code context supports the developer's claim (the code works as they describe)
+- The finding is about style/convention and the developer prefers their approach
+
+REJECT only if:
+- No reason given at all (bare "Invalid", "Won't fix" with zero explanation)
+- The claim is clearly factually wrong AND you can prove it from the code
+- It's a security vulnerability and the developer doesn't address the actual risk
+
+Consider the FULL conversation — the developer may clarify in later replies.
+If the developer's reasoning is at least plausible, ACCEPT it.
+
+If accepted, suggest a one-line rule for .codereview.md to prevent this from being flagged again.
+
+Respond ONLY with JSON, no other text:
+{{"accepted": true, "explanation": "...", "suggested_rule": "..."}}
+or
+{{"accepted": false, "explanation": "...", "suggested_rule": null}}"""
+
+
+def _get_file_diff(file_path: str, workspace: Path, base_commit: str = "") -> str:
+    """Get the git diff for a specific file against the base commit."""
+    base = base_commit or "HEAD~1"
+    try:
+        result = subprocess.run(
+            ["git", "diff", base, "HEAD", "--", file_path],
+            cwd=str(workspace), capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout[:20_000]
+    except Exception as exc:
+        logger.debug("git diff failed for %s: %s", file_path, exc)
     return ""
 
 
@@ -197,69 +413,117 @@ def _build_verification_prompt(
     file_path: str,
     file_content: str,
     findings: List[ExistingCommentThread],
+    file_diff: str = "",
 ) -> str:
     """Build the LLM verification prompt for one file with all its findings."""
     rows = "\n".join(
-        f"| {i + 1} | {f.comment_text[:120].replace(chr(10), ' ')} | {f.line_number} |"
+        f"| {i + 1} | `{f.cr_id}` | {f.comment_text[:200].replace(chr(10), ' ')} | {f.line_number} |"
         for i, f in enumerate(findings)
     )
+
+    diff_section = ""
+    if file_diff:
+        diff_section = f"""
+## Git diff (what changed):
+```diff
+{file_diff}
+```
+"""
+
     return f"""You are verifying whether previously flagged code review findings have been fixed.
 
-## File: {file_path}
-
+## File: `{file_path}`
+{diff_section}
 ## Current file content:
 ```
-{file_content[:8000]}
+{file_content[:_FILE_CONTENT_CAP]}
 ```
 
 ## Previous findings to verify:
-| # | Description | Original line |
-|---|-------------|---------------|
+| # | cr_id | Description | Original line |
+|---|-------|-------------|---------------|
 {rows}
 
 For each finding, determine:
-- `fixed` — the specific issue described is no longer present in the current code
-- `still_present` — the issue still exists (may be at a different line now)
+- `fixed` — the specific issue described is no longer present in the current code.
+  The developer may have fixed it differently than suggested (different approach,
+  moved code, renamed variables, etc.) — if the underlying problem is resolved,
+  mark it `fixed` regardless of the exact approach used.
+- `still_present` — the issue still exists in the current code (may be at a different line now)
+
+IMPORTANT: Look at the git diff to see what actually changed. If the diff shows the
+issue was addressed, mark it `fixed`. Do not require an exact match to the original
+suggestion — judge whether the underlying problem is resolved.
 
 Respond ONLY as a JSON array with no other text:
 [{{"finding": 1, "status": "fixed", "reason": "..."}}, ...]"""
 
 
-def _call_llm_for_verification(prompt: str, expected_count: int) -> List[Dict]:
-    """Call OpenAI chat completions to verify findings.
+def _call_llm_for_verification(
+    prompt: str, expected_count: int, model: str = "",
+) -> Tuple[List[Dict], Dict[str, int]]:
+    """Call OpenAI API to verify findings.
 
-    Returns list of {finding, status, reason} dicts.
-    Any failure or ambiguous response defaults to still_present via _map_llm_results.
+    Returns (results, usage) where results is a list of {finding, status, reason}
+    dicts and usage is {input_tokens, output_tokens}.
     """
+    empty_usage: Dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
+    model = model or "gpt-4o-mini"
     api_key = os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
         logger.warning("OPENAI_API_KEY not set — defaulting all to still_present")
-        return []
+        return [], empty_usage
     try:
         from openai import OpenAI
         client = OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
-            seed=42,
-        )
-        raw = (response.choices[0].message.content or "").strip()
-        # Strip markdown fences if present
+
+        use_responses = "codex" in model
+        if use_responses:
+            response = client.responses.create(
+                model=model,
+                input=[{"type": "message", "role": "user", "content": prompt}],
+            )
+            raw = ""
+            for item in response.output:
+                if item.type == "message":
+                    for content in item.content:
+                        if hasattr(content, "text"):
+                            raw += content.text
+            usage = {
+                "input_tokens": getattr(response.usage, "input_tokens", 0),
+                "output_tokens": getattr(response.usage, "output_tokens", 0),
+            }
+        else:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                seed=42,
+            )
+            raw = (response.choices[0].message.content or "").strip()
+            resp_usage = response.usage
+            usage = {
+                "input_tokens": getattr(resp_usage, "prompt_tokens", 0) if resp_usage else 0,
+                "output_tokens": getattr(resp_usage, "completion_tokens", 0) if resp_usage else 0,
+            }
+
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
+        raw = raw.strip()
         parsed = json.loads(raw)
         if isinstance(parsed, list):
-            return parsed
-        for v in parsed.values():
-            if isinstance(v, list):
-                return v
-        return []
+            return parsed, usage
+        if isinstance(parsed, dict):
+            for v in parsed.values():
+                if isinstance(v, list):
+                    return v, usage
+            return [parsed], usage
+        return [], usage
     except Exception as exc:
-        logger.warning("LLM verification call failed: %s", exc)
-        return []
+        logger.warning("LLM verification call failed for model %s: %s", model, exc)
+        return [], empty_usage
 
 
 def _verify_single_file(
@@ -267,6 +531,8 @@ def _verify_single_file(
     findings: List[ExistingCommentThread],
     workspace: Path,
     settings: Settings,
+    model: str = "",
+    base_commit: str = "",
 ) -> List[FixVerification]:
     """Verify all findings in one modified file via a single LLM call."""
     file_content = _read_file_content(file_path, workspace)
@@ -280,9 +546,12 @@ def _verify_single_file(
             for f in findings
         ]
 
-    prompt = _build_verification_prompt(file_path, file_content, findings)
-    llm_results = _call_llm_for_verification(prompt, len(findings))
-    return _map_llm_results_to_verifications(findings, llm_results)
+    file_diff = _get_file_diff(file_path, workspace, base_commit=base_commit)
+    logger.info("Verifying %d findings in %s (content=%d chars, diff=%d chars)",
+                len(findings), file_path, len(file_content), len(file_diff))
+    prompt = _build_verification_prompt(file_path, file_content, findings, file_diff=file_diff)
+    llm_results, usage = _call_llm_for_verification(prompt, len(findings), model=model)
+    return _map_llm_results_to_verifications(findings, llm_results), usage
 
 
 def _map_llm_results_to_verifications(
