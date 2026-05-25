@@ -589,7 +589,7 @@ def _post_inline_github(finding, pr_id: int, repo: str, commit_id: str, dry_run:
 # ---------------------------------------------------------------------------
 
 def _handle_fix_verifications_ado(fix_verifications, pr_id: int, repo: str, dry_run: bool):
-    """Resolve ADO threads for cr-ids classified as fixed."""
+    """Resolve ADO threads for cr-ids classified as fixed or dismissed."""
     if not fix_verifications or dry_run:
         return
 
@@ -618,6 +618,34 @@ def _handle_fix_verifications_ado(fix_verifications, pr_id: int, repo: str, dry_
                     })
                 except Exception as exc:
                     _eprint(f"Warning: failed to resolve thread for {cr_id}: {exc}")
+
+        from activities.post_pr_comment_activity import CommentThreadStatus
+        dismissed_fvs = [fv for fv in fix_verifications if fv.status == "dismissed"]
+        for fv in dismissed_fvs:
+            thread = thread_by_cr_id.get(fv.cr_id)
+            if not thread:
+                continue
+            try:
+                reason = fv.reason or ""
+                explanation = reason.replace("Developer dismissal accepted: ", "", 1)
+                rule_part = ""
+                if "| Suggested .codereview.md rule: " in explanation:
+                    explanation, rule_text = explanation.split("| Suggested .codereview.md rule: ", 1)
+                    rule_part = (
+                        f"\n\n💡 Consider adding to your `.codereview.md` to prevent "
+                        f"this from being flagged again:\n> {rule_text.strip()}"
+                    )
+                message = f"✅ **Dismissal accepted** — {explanation.strip()}{rule_part}"
+                resolve_activity.execute({
+                    "thread_id": thread.thread_id,
+                    "pr_id": pr_id,
+                    "repository_id": repo or None,
+                    "message": message,
+                    "status": CommentThreadStatus.WONT_FIX,
+                })
+            except Exception as exc:
+                _eprint(f"Warning: failed to post dismissal reply for {fv.cr_id}: {exc}")
+
     except Exception as exc:
         _eprint(f"Warning: fix verification resolution failed: {exc}")
 
@@ -788,9 +816,6 @@ def _build_summary_markdown(
         lines += [
             "",
             "### 📊 Review Statistics",
-            f"- ✅ Files Reviewed: {_coverage_display(files_reviewed, total_code_files)}",
-            f"- ⏭️ Files Skipped: {files_skipped}",
-            f"- ❌ Files Failed: 0",
             f"- 💬 Total Comments: {len(filtered_findings)}",
             "",
         ]
