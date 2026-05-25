@@ -144,8 +144,12 @@ def default_penalty_matrix():
         "security": {"critical": 5.0, "warning": 4.0, "suggestion": 2.0, "good": 0.0},
         "performance": {"critical": 3.0, "warning": 2.0, "suggestion": 1.0, "good": 0.0},
         "best_practices": {"critical": 2.0, "warning": 1.0, "suggestion": 0.5, "good": 0.0},
-        "code_style": {"critical": 0.0, "warning": 0.0, "suggestion": 0.0, "good": 0.0},
-        "documentation": {"critical": 0.0, "warning": 0.0, "suggestion": 0.0, "good": 0.0},
+        "architecture": {"critical": 3.0, "warning": 2.0, "suggestion": 1.0, "good": 0.0},
+        "correctness": {"critical": 2.0, "warning": 1.0, "suggestion": 0.5, "good": 0.0},
+        "error_handling": {"critical": 1.5, "warning": 0.75, "suggestion": 0.25, "good": 0.0},
+        "code_style": {"critical": 1.0, "warning": 0.5, "suggestion": 0.25, "good": 0.0},
+        "documentation": {"critical": 1.0, "warning": 0.5, "suggestion": 0.25, "good": 0.0},
+        "testing": {"critical": 1.5, "warning": 0.75, "suggestion": 0.25, "good": 0.0},
     }
 
 

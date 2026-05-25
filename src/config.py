@@ -196,20 +196,20 @@ class Settings(BaseSettings):
     penalty_best_practices_warning: float = Field(default=1.0, ge=0.0, le=100.0)
     penalty_best_practices_suggestion: float = Field(default=0.5, ge=0.0, le=100.0)
 
-    # Code Style Issue Penalties (0 = informational only)
-    penalty_code_style_critical: float = Field(default=0.0, ge=0.0, le=100.0)
-    penalty_code_style_warning: float = Field(default=0.0, ge=0.0, le=100.0)
-    penalty_code_style_suggestion: float = Field(default=0.0, ge=0.0, le=100.0)
+    # Code Style Issue Penalties
+    penalty_code_style_critical: float = Field(default=1.0, ge=0.0, le=100.0)
+    penalty_code_style_warning: float = Field(default=0.5, ge=0.0, le=100.0)
+    penalty_code_style_suggestion: float = Field(default=0.25, ge=0.0, le=100.0)
 
-    # Documentation Issue Penalties (0 = informational only)
-    penalty_documentation_critical: float = Field(default=0.0, ge=0.0, le=100.0)
-    penalty_documentation_warning: float = Field(default=0.0, ge=0.0, le=100.0)
-    penalty_documentation_suggestion: float = Field(default=0.0, ge=0.0, le=100.0)
+    # Documentation Issue Penalties
+    penalty_documentation_critical: float = Field(default=1.0, ge=0.0, le=100.0)
+    penalty_documentation_warning: float = Field(default=0.5, ge=0.0, le=100.0)
+    penalty_documentation_suggestion: float = Field(default=0.25, ge=0.0, le=100.0)
 
     # Architecture Issue Penalties
-    penalty_architecture_critical: float = Field(default=2.0, ge=0.0, le=100.0)
-    penalty_architecture_warning: float = Field(default=1.0, ge=0.0, le=100.0)
-    penalty_architecture_suggestion: float = Field(default=0.5, ge=0.0, le=100.0)
+    penalty_architecture_critical: float = Field(default=3.0, ge=0.0, le=100.0)
+    penalty_architecture_warning: float = Field(default=2.0, ge=0.0, le=100.0)
+    penalty_architecture_suggestion: float = Field(default=1.0, ge=0.0, le=100.0)
 
     # Correctness Issue Penalties
     penalty_correctness_critical: float = Field(default=2.0, ge=0.0, le=100.0)
@@ -221,10 +221,10 @@ class Settings(BaseSettings):
     penalty_error_handling_warning: float = Field(default=0.75, ge=0.0, le=100.0)
     penalty_error_handling_suggestion: float = Field(default=0.25, ge=0.0, le=100.0)
 
-    # Testing Issue Penalties (0 = informational only)
-    penalty_testing_critical: float = Field(default=0.0, ge=0.0, le=100.0)
-    penalty_testing_warning: float = Field(default=0.0, ge=0.0, le=100.0)
-    penalty_testing_suggestion: float = Field(default=0.0, ge=0.0, le=100.0)
+    # Testing Issue Penalties
+    penalty_testing_critical: float = Field(default=1.5, ge=0.0, le=100.0)
+    penalty_testing_warning: float = Field(default=0.75, ge=0.0, le=100.0)
+    penalty_testing_suggestion: float = Field(default=0.25, ge=0.0, le=100.0)
 
     # Star Rating Thresholds (penalty points)
     penalty_threshold_5_stars: float = Field(default=0.0, ge=0.0, le=1000.0)

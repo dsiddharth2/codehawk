@@ -59,10 +59,10 @@ class TestCalculatePRScore:
         score = pr_scorer.calculate_pr_score([f])
         assert score.total_penalty == 3.0
 
-    def test_code_style_has_zero_penalty(self, pr_scorer):
+    def test_code_style_has_light_penalty(self, pr_scorer):
         f = make_finding(severity="critical", category="code_style")
         score = pr_scorer.calculate_pr_score([f])
-        assert score.total_penalty == 0.0
+        assert score.total_penalty == 1.0
 
     def test_multiple_findings_accumulate_penalty(self, pr_scorer):
         findings = [
@@ -141,7 +141,7 @@ class TestApplyModeMultipliers:
         result = pr_scorer.apply_mode_multipliers([f], ["architecture"])
         assert result[0].severity == "warning"
 
-    def test_migration_mode_elevates_all_to_critical(self, pr_scorer):
+    def test_migration_mode_elevates_nonzero_penalty_to_critical(self, pr_scorer):
         findings = [
             make_finding("cr-001", severity="suggestion", category="best_practices"),
             make_finding("cr-002", severity="warning", category="performance"),
@@ -149,6 +149,15 @@ class TestApplyModeMultipliers:
         ]
         result = pr_scorer.apply_mode_multipliers(findings, ["migration"])
         assert all(f.severity == "critical" for f in result)
+
+    def test_migration_mode_skips_zero_penalty_categories(self, pr_scorer):
+        findings = [
+            make_finding("cr-001", severity="suggestion", category="code_style"),
+            make_finding("cr-002", severity="suggestion", category="documentation"),
+            make_finding("cr-003", severity="suggestion", category="testing"),
+        ]
+        result = pr_scorer.apply_mode_multipliers(findings, ["migration"])
+        assert all(f.severity == "suggestion" for f in result)
 
     def test_mode_multipliers_do_not_mutate_originals(self, pr_scorer):
         f = make_finding(severity="warning", category="security")

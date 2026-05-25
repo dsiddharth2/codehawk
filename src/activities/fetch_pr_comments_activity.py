@@ -84,7 +84,7 @@ class FetchPRCommentsActivity(BaseActivity[int, List[ExistingCommentThread]]):
                     continue
 
                 parsed_data = self._parse_comment_markdown(comment_text)
-                cr_id = self._extract_cr_id(comment_text)
+                cr_id = self._extract_cr_id_from_properties(thread) or self._extract_cr_id(comment_text)
 
                 existing_comment = ExistingCommentThread(
                     thread_id=thread.id,
@@ -117,15 +117,22 @@ class FetchPRCommentsActivity(BaseActivity[int, List[ExistingCommentThread]]):
             self._log_error(e, pr_id=pr_id)
             raise
 
+    def _extract_cr_id_from_properties(self, thread) -> Optional[str]:
+        """Extract cr-id from ADO thread properties (preferred over comment text)."""
+        props = getattr(thread, 'properties', None)
+        if not props:
+            return None
+        cr_id_prop = props.get('CodeHawk.CrId')
+        if isinstance(cr_id_prop, dict):
+            return cr_id_prop.get('$value')
+        if isinstance(cr_id_prop, str):
+            return cr_id_prop
+        return None
+
     def _extract_cr_id(self, comment_text: str) -> Optional[str]:
         """
         Extract cr-id from HTML comment marker <!-- cr-id: xxx -->.
-
-        Args:
-            comment_text: Comment markdown text
-
-        Returns:
-            cr-id string or None if not present
+        Backward compat fallback for threads posted before properties support.
         """
         match = re.search(r'<!--\s*cr-id:\s*(\S+)\s*-->', comment_text)
         return match.group(1) if match else None
