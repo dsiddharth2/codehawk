@@ -1,181 +1,323 @@
-# Codehawk — Architecture
+# CodeHawk — Architecture
 
 ## Overview
 
-Codehawk is a Docker-based AI code review system. An LLM agent (Codex, Claude, or Gemini) reads a PR and writes `findings.json`; a deterministic Python script then scores, deduplicates, and posts comments to ADO or GitHub. The two phases are explicitly separated so the agent never touches the VCS API and the poster never touches the LLM.
+CodeHawk is a Docker-based AI code review system. An LLM agent reviews a PR and writes `findings.json`; a deterministic Python engine then scores, deduplicates, and posts comments to Azure DevOps or GitHub. The two phases are explicitly separated — the agent never touches the VCS posting API, and the poster never touches the LLM.
+
+---
+
+## Pipeline Flow
+
+```mermaid
+sequenceDiagram
+    participant CI as CI System
+    participant EP as entrypoint.sh
+    participant BR as BatchReviewJob
+    participant RJ as ReviewJob (per batch)
+    participant AG as OpenAI Agent
+    participant PF as post_findings.py
+    participant VCS as ADO / GitHub
+
+    CI->>EP: docker run (PR_ID, REPO, VCS, OPENAI_API_KEY)
+    EP->>BR: python run_agent.py
+    BR->>BR: Pre-fetch PR details + filter non-code files
+    BR->>BR: Detect re-push (prior findings exist?)
+    BR->>BR: Build AST graph (optional, timeout-scaled)
+
+    alt Small PR (≤ batch_size files)
+        BR->>RJ: Single ReviewJob
+    else Large PR
+        BR->>RJ: Split into batches (up to 3 parallel)
+    end
+
+    RJ->>RJ: Pre-compute diffs + risk analysis
+    RJ->>AG: Two-pass review (scan → verify)
+    AG-->>RJ: findings.json
+    BR->>BR: Merge findings from all batches
+    BR->>PF: Phase 2 — score, post, gate
+    PF->>VCS: Inline comments + PR summary
+    PF-->>CI: JSON output (gate: pass/fail)
+```
 
 ---
 
 ## Two-Phase Architecture
 
-**Phase 1 — Agent review**
-The agent runs inside a Docker container with access to the workspace. It reads the PR diff and changed files using VCS tools, then writes `/workspace/.cr/findings.json`. The agent does not post anything.
+### Phase 1 — Agent Review
 
-**Phase 2 — Deterministic posting**
-`post_findings.py` reads `findings.json`, filters by confidence, caps findings, deduplicates via cr-ids, scores the PR, posts inline comments, and updates the summary. This phase is fully deterministic and testable without a live LLM.
+The agent runs inside a Docker container with access to the workspace. It reads the PR diff and changed files using registered tools, then writes `/workspace/.cr/findings.json`.
 
-**Why this separation?**
-- The agent is non-deterministic; the poster must be deterministic for idempotency.
-- `--dry-run` can exercise the full poster path without VCS writes.
-- Phase 2 can be re-run independently if posting fails.
+**Key principle:** The agent produces structured data only. It never posts comments or modifies PR state.
+
+### Phase 2 — Deterministic Posting
+
+`post_findings.py` reads `findings.json`, normalizes and validates findings, filters by confidence, caps per file, deduplicates via cr-ids, scores the PR, posts inline comments, resolves fix verification threads, and outputs a structured JSON result for CI gating.
+
+**Key principle:** Phase 2 is fully deterministic. It can be re-run independently, tested without an LLM, and exercised with `--dry-run`.
+
+---
+
+## Batch Orchestration
+
+`BatchReviewJob` is the top-level orchestrator (`src/batch_review_job.py`):
+
+1. **Pre-fetch PR data** once via `FetchPRDetailsActivity`
+2. **Filter non-code files** (extensions in `config.skip_extensions`)
+3. **Detect re-pushes** — if previous CodeHawk findings exist in PR threads, switch to `VERIFY_FIXES` mode
+4. **Build AST graph** (optional, timeout scaled by file count: 30s for ≤10 files up to 600s for 51-100)
+5. **Split into batches** — small PRs get a single `ReviewJob`; large PRs are split (default 10 files/batch, up to 3 concurrent via `ThreadPoolExecutor`)
+6. **Merge findings** from all batches (dedup by file+line+category)
+7. **Publish** via `post_findings.run()` (Phase 2)
+
+### Review Modes
+
+| Mode | Trigger | Effect |
+|------|---------|--------|
+| `FULL` | Default | Find new issues + verify prior findings |
+| `VERIFY_FIXES` | Prior findings detected | Lightweight: only verify prior findings, no new analysis |
+| `CHECK_NEW` | Explicit flag | Fresh review, skip prior findings |
+
+---
+
+## Two-Pass Review
+
+When enabled (`two_pass_enabled=True`, default), the agent uses a two-pass approach:
+
+### Pass 1A — Standard Scan
+Single-turn API call. Covers correctness, error handling, testing, code style. Returns `candidates[]` and `files_clean[]` as JSON. No tools available.
+
+### Pass 1B — Deep Scan
+Single-turn API call. Covers security, performance, architecture. Returns additional `candidates[]`. No tools available.
+
+### Candidate Merge
+Candidates from both scans are deduplicated by file+line+category.
+
+### Pass 2 — Verify
+Multi-turn agent loop with full tool access (VCS, workspace, graph). The agent verifies each candidate, refines or drops false positives, adds concrete code suggestions. Uses sliding window (last 3 tool exchanges) for the Responses API to control token cost.
+
+**Fallback:** If Pass 2 fails, Pass 1 candidates are used as unverified findings (confidence 0.6-0.75).
+
+---
+
+## Agent Runner
+
+`OpenAIAgentRunner` (`src/agents/openai_runner.py`) supports two OpenAI APIs:
+
+| API | Models | Detection |
+|-----|--------|-----------|
+| Chat Completions | gpt-4o, gpt-4.1, o3, etc. | Default |
+| Responses | gpt-5-codex, codex-mini-latest | Auto-detected by model name |
+
+**Tool registration:** VCS tools, workspace tools, and graph tools (if available) are registered via `ToolRegistry`. The registry provides both Chat Completions and Responses API tool definitions from the same registration.
+
+**Turn budget:** System prompt includes the turn budget. At `max_turns - 3`, a DEADLINE message is injected telling the agent to output findings immediately.
+
+**Sliding window (Responses API):** Keeps the original prompt plus only the last N tool exchanges (`SLIDING_WINDOW_SIZE=3`), reducing per-turn token cost for long sessions.
+
+---
+
+## Tools
+
+### VCS Tools (`src/tools/vcs_tools.py`)
+- `get_pr` — PR metadata, file changes, commit SHAs
+- `get_file_content` — File content at a specific commit (source/target/HEAD)
+- `list_threads` — PR comment threads (filterable by file, status)
+- `get_file_diff` — Unified diff between commits (supports line range drill-in)
+
+### Workspace Tools (`src/tools/workspace_tools.py`)
+- `read_local_file` — Read file from workspace (uses `git ls-files` for path resolution)
+- `search_code` — Ripgrep pattern search (fallback to grep)
+- `git_blame` — Blame info for a file
+
+### Graph Tools (`src/tools/graph_tools.py`)
+Available only when AST graph is built successfully:
+- `get_change_analysis` — Risk score, review priorities, test gaps
+- `get_blast_radius` — Files and functions impacted by changes
+- `get_callers` — Structural callers of a function
+- `get_dependents` — Files importing a module
+
+---
+
+## Risk Classification
+
+`RiskClassifier` (`src/risk_classifier.py`) assigns HIGH/MEDIUM/LOW risk to each changed file using a weighted formula:
+
+| Component | Weight | Signal |
+|-----------|--------|--------|
+| Lines changed | 0.25 | Normalized to 500 lines |
+| Path sensitivity | 0.25 | auth/crypto/permissions → 1.0, tests/docs → 0.0 |
+| New file | 0.15 | New files get 1.0 |
+| Test coverage gaps | 0.15 | No test coverage → 1.0 |
+| Caller count | 0.10 | Impacted functions (from graph) |
+| File type | 0.10 | Code extensions → 1.0, markup → 0.0 |
+
+Classification: HIGH (≥0.6), MEDIUM (≥0.3), LOW (<0.3). Risk level determines review depth — HIGH files get full review + verification, LOW files get a diff scan.
+
+---
+
+## Fix Verification
+
+`fix_verifier.py` determines if prior findings were addressed on re-push:
+
+```
+For each prior finding:
+  ├── File deleted?         → not_relevant
+  ├── File unmodified?
+  │   ├── Developer replied? → evaluate dismissal (LLM)
+  │   │   ├── Valid reason  → dismissed (0 penalty)
+  │   │   └── Invalid       → still_present
+  │   └── No reply          → still_present
+  └── File modified?        → verify with LLM (per-file call)
+      ├── Issue resolved    → fixed
+      └── Issue remains     → still_present
+```
+
+**Deterministic LLM calls:** One call per modified file (all findings for that file batched together). Cap: 15 individual calls, then batch remaining 5-per-call. Default on failure: `still_present`.
+
+### Developer Dismissals
+
+Developers can reply to a CodeHawk comment with a technical reason for disagreement. On the next push:
+
+1. `FetchPRCommentsActivity.get_developer_replies()` extracts non-CodeHawk replies from PR threads
+2. `_evaluate_dismissal()` sends the finding + code snippet + developer reply to the LLM
+3. If accepted: finding marked `dismissed`, reply posted with explanation + suggested `.codereview.md` rule
+4. If rejected: finding remains `still_present`, explanation posted
+
+Accepted dismissals resolve the thread with `WONT_FIX` status (not `FIXED`), distinguishing developer-disputed findings from genuinely fixed ones.
 
 ---
 
 ## Idempotency via cr-id Deduplication
 
-Every finding gets a stable identifier computed by `post_findings.py`:
+Every finding gets a stable identifier:
 
 ```python
 hashlib.sha1(f"{file}:{line}:{category}".encode()).hexdigest()[:8]
 ```
 
-The agent sets `cr_id: null` in `findings.json`; the poster computes the hash and injects `<!-- cr-id: {id} -->` into every posted comment body. On re-runs, the poster fetches existing thread markers, extracts cr-ids, and skips findings whose cr-id is already present. This makes re-runs safe — no duplicate comments, ever.
+The agent writes `cr_id: null`; the poster computes the hash and injects `<!-- cr-id: {id} -->` into every posted comment. On re-runs, existing thread markers are extracted and matching findings are skipped. This makes re-runs safe — no duplicate comments.
 
-**Limitation:** cr-id uses the file path. If a file is renamed between runs, the cr-id changes and prior comments will not be matched. Accepted for v1.
-
----
-
-## VCS Abstraction
-
-Two distinct invocation patterns are used:
-
-| Caller | ADO | GitHub |
-|--------|-----|--------|
-| Agent (Phase 1) | `python vcs.py <subcommand>` | `gh pr view`, `gh api` |
-| Poster (Phase 2) | Activity classes imported directly | `subprocess.run` calling `gh` |
-
-`vcs.py` is a thin argparse CLI that wraps the ported ADO activity classes and outputs JSON to stdout. It exists so the agent can call it as a shell command without knowing Python internals. `post_findings.py` bypasses `vcs.py` and imports activity classes directly for ADO (avoids subprocess overhead per comment).
-
-For GitHub, all VCS calls in `post_findings.py` go through `_gh_run_with_retry()`, which wraps `subprocess.run` with exponential backoff for rate-limit errors.
+**Limitation:** cr-id uses the file path. File renames between runs break matching (accepted for v1).
 
 ---
 
-## Penalty-Based Scoring
+## Scoring System
 
-The PR receives a 1–5 star rating. Scoring deducts penalties per finding:
+`PRScorer` (`src/pr_scorer.py`) calculates penalty-based quality scores — **lower is better**.
 
-- **Critical** — largest penalty
-- **Warning** — medium penalty
-- **Suggestion** — small penalty
-- **Good** — no penalty (positive signal)
+### Penalty Matrix (defaults)
 
-**Review mode multipliers** are applied before summing:
-- Security mode: security-category findings × 2
-- Performance mode: performance-category findings × 2
-- Architecture mode: best_practices-category × 1.5
-- Migration mode: all findings elevated to minimum critical severity
+| Category | Critical | Warning | Suggestion |
+|----------|----------|---------|------------|
+| Security | 5.0 | 4.0 | 2.0 |
+| Performance | 3.0 | 2.0 | 1.0 |
+| Best Practices | 2.0 | 1.0 | 0.5 |
+| Architecture | 3.0 | 2.0 | 1.0 |
+| Correctness | 2.0 | 1.0 | 0.5 |
+| Error Handling | 1.5 | 0.75 | 0.25 |
+| Code Style | 1.0 | 0.5 | 0.25 |
+| Testing | 1.5 | 0.75 | 0.25 |
 
-Mode multipliers stack when multiple modes are active; the strictest multiplier per finding wins.
+### Mode Multipliers
 
----
+- **Security mode:** security findings ×2 (warning → critical penalty)
+- **Performance mode:** performance findings ×2
+- **Architecture mode:** best_practices ×1.5 (suggestion → warning penalty)
+- **Migration mode:** all findings elevated to critical
 
-## findings.json Schema
+### Star Rating
 
-`findings.json` is the contract between Phase 1 and Phase 2. Schema is defined in `commands/findings-schema.json`.
+| Stars | Penalty | Quality |
+|-------|---------|---------|
+| 5 | 0.0 | Perfect |
+| 4 | ≤ 5.0 | Excellent |
+| 3 | ≤ 15.0 | Good |
+| 2 | ≤ 30.0 | Needs Work |
+| 1 | ≤ 50.0 | Poor |
+| 0 | > 50.0 | Critical |
 
-**Top-level fields:**
-- `pr_id`, `repo`, `project`, `vcs` — PR identity
-- `review_modes` — list of active modes (standard, security, migration, docs/chore, architecture, performance)
-- `tier` — T1–T5 scale tier assessed by the agent
-- `agent`, `model`, `tool_calls` — observability metadata
-- `existing_cr_ids` — cr-ids already posted before this run (agent reads these)
-- `findings[]` — list of Finding objects
-- `fix_verifications[]` — list of FixVerification objects (only on re-push)
-
-**Finding fields:** `cr_id` (null from agent, filled by poster), `file`, `line`, `line_range`, `severity`, `category`, `confidence`, `title`, `body`, `suggestion`, `trace`
-
-**FixVerification fields:** `cr_id`, `status` (fixed/still_present/not_relevant), `reason`
-
----
-
-## Post Findings Engine — Filtering and Cap Logic
-
-`post_findings.py` applies filters in order before posting:
-
-1. **Confidence filter** — drop findings below 0.7 (configurable via `.codereview.yml`)
-2. **Cap** — max 30 findings total, max 5 per file. When over cap, prioritize by severity (critical → warning → suggestion → good).
-3. **Dedup** — skip findings whose cr-id already appears in existing PR threads.
+All thresholds configurable via environment variables.
 
 ---
 
-## Gate Thresholds
+## Smart Diff Summarization
 
-`post_findings.py` reads `/workspace/.codereview.yml` if present and applies gate thresholds to the CI output JSON:
-- `min_star_rating` — fail CI if score falls below this
-- `fail_on_critical` — fail CI if any critical findings remain unresolved
+`smart_diff.py` handles large diffs that would overflow the agent's context:
 
-The structured JSON output to stdout is consumed by CI pipelines to set pass/fail status.
+- **Small diffs** (< `smart_diff_threshold_kb`, default 15KB): passed as raw text
+- **Large diffs**: parsed into structured hunk summaries (line ranges, added/removed counts)
+- Agent can drill into high-risk hunks via `get_file_diff` with start_line/end_line
+
+---
+
+## Language-Specific Rules
+
+`ReviewJob` detects languages from file extensions and loads rules from `commands/lang-rules/{lang}.md`. Rules are filtered by detected framework version (e.g., ".NET 8+", "Python 3.10+") using `StackDetector` (`src/stack_detector.py`), which reads version files (`package.json`, `.csproj`, `go.mod`, etc.).
+
+---
+
+## Activities Layer
+
+All VCS operations are encapsulated in activity classes (`src/activities/`), inheriting from `BaseActivity[TInput, TOutput]`:
+
+| Activity | Purpose |
+|----------|---------|
+| `FetchPRDetailsActivity` | PR metadata, file changes, commit SHAs |
+| `FetchFileContentActivity` | File content at a commit |
+| `FetchFileDiffActivity` | Unified diff between commits |
+| `FetchPRCommentsActivity` | PR comment threads (+ developer reply extraction) |
+| `PostPRCommentActivity` | Post inline comments |
+| `PostFixReplyActivity` | Reply to existing threads (supports FIXED/WONT_FIX status) |
+| `UpdateSummaryActivity` | Post/update PR summary comment |
+
+---
+
+## ADO Rendering Considerations
+
+PR comments are rendered as markdown in Azure DevOps, which has specific rendering rules:
+
+- **Work item auto-linking:** `#<number>` is interpreted as a work item reference. All PR ID references use backtick escaping (`` `#42` ``) to prevent this.
+- **Code fences:** Must start on their own line. The `**Suggestion:**` label is separated from code fence openings with a newline.
+
+---
+
+## Configuration
+
+`Settings` (`src/config.py`, Pydantic BaseSettings) loads from environment variables:
+
+| Group | Key Settings |
+|-------|-------------|
+| VCS | `vcs`, `azure_devops_org/project/pat`, `gh_token`, `auth_mode` |
+| Review | `min_confidence_score` (0.5), `max_comments_per_file` (5), `update_existing_summary` |
+| Graph | `enable_graph`, `skip_extensions` |
+| Batching | `batch_size` (10), `batch_max_turns` (10), `coverage_gate_mode` |
+| Two-Pass | `two_pass_enabled`, `scan_pass_max_retries`, `verify_pass_max_turns` (7) |
+| Scoring | `enable_pr_scoring`, `penalty_*_*` matrix, `penalty_threshold_*_stars` |
+| Risk | `risk_high_threshold` (0.6), `risk_medium_threshold` (0.3) |
 
 ---
 
 ## Docker Container
 
-Base image: `node:22-slim`. Layers:
-- System: Python 3, git, curl, jq, ripgrep
+Base image: `python:3.11`. Key layers:
+- System: git, curl, ripgrep
 - GitHub CLI (`gh`)
-- NPM globals: `@openai/codex`, `repomix`
-- Python venv: `azure-devops`, `pydantic`, `pydantic-settings`, `msrest`
-- Copied into image: `commands/`, `src/`, `templates/`, `AGENTS.md`
+- Python dependencies: `azure-devops`, `pydantic`, `pydantic-settings`, `openai`, `msrest`
+- Application: `src/`, `commands/`, `entrypoint.sh`
 
-`PYTHONPATH` points to `/app/src`. `entrypoint.sh` orchestrates Phase 1 (agent dispatch by `$AGENT` env var) and Phase 2 (post_findings.py invocation).
-
-**Image size risk:** Node 22 + Codex + Python + gh + ripgrep + repomix + azure-devops SDK risks exceeding 2 GB. Mitigate with multi-stage builds if needed (Phase 9).
+`PYTHONPATH=/app/src`. `WORKDIR=/workspace`. `entrypoint.sh` validates env vars and runs the pipeline.
 
 ---
 
-## Config Philosophy
+## Key Design Decisions
 
-`src/config.py` (via pydantic-settings) carries only:
-- ADO auth: PAT, system token, organization URL, project
-- GitHub: `GH_TOKEN`
-- VCS selector: `VCS` (ado/github)
-- Penalty matrix and star thresholds
-
-All AI/LLM settings were removed from config — the agent CLI handles its own auth. This keeps the Python layer fully VCS-focused.
-
----
-
-## Code Port Strategy
-
-The old codebase (`BBX_AI - Doer/Pipelines/CodeReviewer/src/`) provided battle-tested ADO activities, scoring, and models. These were ported with minimal adaptation (import path fixes, cr-id injection). Code that managed LLM calls, prompt building, response parsing, and comment consolidation was deleted entirely — replaced by agent CLI + two-phase design + cr-id dedup.
-
-The port preserves backward-compatible field names on the Settings object (e.g., `azure_devops_org`, `azure_devops_url`) so activity classes work without modification.
-
----
-
-## Key Trade-offs
-
-| Decision | Chosen approach | Alternative considered | Reason |
-|----------|----------------|------------------------|--------|
-| VCS invocation in poster | Import ADO activities directly | subprocess vcs.py | Avoids per-comment subprocess overhead |
-| cr-id generation | Poster computes SHA1 hash | Agent computes hash | LLMs can't reliably compute SHA1 |
-| GitHub thread resolution | Reply "Fixed" + optional GraphQL minimize | Native resolve (not available) | GitHub has no native thread resolution API |
-| Agent-to-VCS boundary | Agent never calls post; poster never calls LLM | Merged single script | Enables dry-run, re-run, and deterministic tests |
-| Comment consolidation | cr-id dedup in poster | LLM-based comment merging (old approach) | Deterministic, no LLM cost, idempotent |
-
----
-
-## Risk Register Summary
-
-| Risk | Severity | Status |
-|------|----------|--------|
-| Codex sandbox conflicts with Docker | High | `--sandbox=none` fallback available |
-| Prompt quality determines review quality | High | Iterative tuning; multi-agent comparison planned Phase 8 |
-| cr-id instability on file rename | Medium | Accepted limitation for v1; documented |
-| ADO SDK version compatibility | Medium | Pinned `azure-devops>=7.1,<8.0` |
-| Agent exceeds 40-tool-call cap | Medium | Phase 2 still processes partial findings |
-| GitHub API pagination not handled | Low | Max 30 findings cap limits impact; `--paginate` planned |
-| Docker image size > 2 GB | Medium | Multi-stage build optimization planned Phase 9 |
-
----
-
-## Sprint Boundaries
-
-**Sprint 1 (complete):** Phases 1–6 — scaffold, ported foundation, VCS CLI, post findings engine, core prompt, Docker, review modes, fix verification, GitHub integration.
-
-**Deferred (Sprint 2+):**
-- Phase 7: architecture and performance review modes
-- Phase 8: Claude and Gemini multi-agent support in Dockerfile
-- Phase 9: Container registry (ACR/GHCR) + image versioning
-- Phase 10: T1–T5 repomix tiers, dismissed-feedback learning, cost footer
-- Phase 11: Local `cr` CLI + PyPI package
+| Decision | Chosen Approach | Rationale |
+|----------|----------------|-----------|
+| Phase separation | Agent writes data, poster reads data | Enables dry-run, re-run, deterministic testing |
+| Pre-computation | Diffs + analysis injected into prompt | Reduces tool calls and token waste |
+| Two-pass review | Scan (cheap) → Verify (expensive) | Faster for large PRs, filters false positives early |
+| Batch parallelism | Up to 3 concurrent ReviewJobs | Keeps wall-clock time manageable for large PRs |
+| Penalty scoring | Lower is better, category × severity matrix | Tunable via config without code changes |
+| cr-id dedup | Poster computes SHA1 from file:line:category | LLMs can't reliably compute hashes |
+| Dismissal defaults | still_present on any failure | Safe default — never auto-accept |
+| Graph degradation | Optional; pipeline works without it | Falls back to search_code for callers/dependents |

@@ -27,6 +27,15 @@ Navigation hub for all CodeHawk documentation.
 
 ---
 
+## Design Documents
+
+| Document | Description |
+|----------|-------------|
+| [Developer Dismissal Handling](../.claude/plan-dismissal-handling.md) | Design: how CodeHawk evaluates developer replies to disputed findings |
+| [Two-Pass Review Design](superpowers/specs/2026-05-23-two-pass-review-design.md) | Design: scan → verify two-pass review architecture |
+
+---
+
 ## Quick Links
 
 | Resource | Link |
