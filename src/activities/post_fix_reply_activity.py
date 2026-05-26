@@ -64,7 +64,8 @@ class PostFixReplyActivity(BaseActivity[dict, bool]):
             from activities.post_pr_comment_activity import CommentThreadStatus
             from azure.devops.v7_1.git.models import CommentThread
 
-            thread_update = CommentThread(status=CommentThreadStatus.FIXED)
+            status = input_data.get('status', CommentThreadStatus.FIXED)
+            thread_update = CommentThread(status=status)
             self.git_client.update_thread(
                 comment_thread=thread_update,
                 repository_id=repository_id,

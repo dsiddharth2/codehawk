@@ -64,7 +64,14 @@ All GitHub calls go through `_gh_run_with_retry()` which applies exponential bac
 Every posted inline comment includes:
 - Severity icon + category header
 - Finding body + suggestion
+- Confidence percentage
 - `<!-- cr-id: {id} -->` HTML comment at the end (used for dedup on next run)
+
+### ADO Rendering Notes
+
+**PR ID references** — All `#<number>` references to PR IDs are wrapped in backticks (`` `#42` ``) to prevent Azure DevOps from auto-linking them to work items (PBIs/Bugs). Without backticks, ADO interprets `#6718` as a work item link and renders the work item title instead of the PR number.
+
+**Code suggestions** — When a finding's suggestion starts with a code fence (` ``` `), the `**Suggestion:**` label is placed on a separate line from the opening fence. ADO markdown requires code fences to start on their own line; inline fences render as literal backtick text instead of a formatted code block.
 
 ## Inline Comment — GitHub API Payload
 

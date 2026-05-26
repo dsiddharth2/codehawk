@@ -524,7 +524,8 @@ def _post_inline_ado(finding, pr_id: int, repo: str, dry_run: bool) -> bool:
         f"{finding.message}"
     )
     if finding.suggestion:
-        body += f"\n\n**Suggestion:** {finding.suggestion}"
+        sep = "\n" if finding.suggestion.lstrip().startswith("```") else " "
+        body += f"\n\n**Suggestion:**{sep}{finding.suggestion}"
     body += f"\n\n*Confidence: {int(finding.confidence * 100)}%*"
 
     settings = get_settings()
@@ -559,7 +560,8 @@ def _post_inline_github(finding, pr_id: int, repo: str, commit_id: str, dry_run:
         f"{finding.message}"
     )
     if finding.suggestion:
-        body += f"\n\n**Suggestion:** {finding.suggestion}"
+        sep = "\n" if finding.suggestion.lstrip().startswith("```") else " "
+        body += f"\n\n**Suggestion:**{sep}{finding.suggestion}"
     body += f"\n\n*Confidence: {int(finding.confidence * 100)}%*"
     body += f"\n\n<!-- cr-id: {finding.id} -->"
 
@@ -697,7 +699,7 @@ def _generate_comparison_md(score, fix_verifications, pr_id: int) -> str:
             old_score=None,
             new_score=score,
             fix_verifications=fix_verifications,
-            pr_title=f"PR #{pr_id}",
+            pr_title=f"PR `#{pr_id}`",
         )
     except Exception as exc:
         _eprint(f"Warning: failed to generate score comparison: {exc}")
@@ -798,7 +800,7 @@ def _build_summary_markdown(
 
     # Scoring details (collapsible)
     if pr_details:
-        pr_title = getattr(pr_details, "title", "") or f"PR #{findings_file.pr_id}"
+        pr_title = getattr(pr_details, "title", "") or f"PR `#{findings_file.pr_id}`"
         author = getattr(pr_details, "author", "") or "Unknown"
         source_branch = getattr(pr_details, "source_branch", "") or ""
         target_branch = getattr(pr_details, "target_branch", "") or ""
@@ -807,7 +809,7 @@ def _build_summary_markdown(
             "<details>",
             "<summary>📊 Scoring Details (click to expand)</summary>",
             "",
-            f"**PR {findings_file.pr_id}: {pr_title}**",
+            f"**PR `#{findings_file.pr_id}`: {pr_title}**",
             "",
             f"- 👤 Author: {author}",
         ]
@@ -824,7 +826,7 @@ def _build_summary_markdown(
             "<details>",
             "<summary>📊 Scoring Details (click to expand)</summary>",
             "",
-            f"**PR #{findings_file.pr_id}** · `{findings_file.repo}`",
+            f"**PR `#{findings_file.pr_id}`** · `{findings_file.repo}`",
             "",
             f"- 💬 Total Comments: {len(filtered_findings)}",
             "",
@@ -996,7 +998,7 @@ def _write_audit_trail(
     export_path = cr_dir / f"review_{pr_id}_{now:%Y%m%d_%H%M%S}.md"
 
     lines = [
-        f"# Code Review Audit Trail — PR #{pr_id}",
+        f"# Code Review Audit Trail — PR `#{pr_id}`",
         "",
         f"**Generated:** {now:%Y-%m-%d %H:%M:%S}",
         "",
