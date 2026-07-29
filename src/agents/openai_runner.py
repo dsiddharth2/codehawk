@@ -115,7 +115,7 @@ class AgentResult:
         self.returncode: int = 0
 
 
-RESPONSES_API_MODELS = {"gpt-5-codex", "codex-mini-latest"}
+RESPONSES_API_MODELS = {"gpt-5.3-codex", "gpt-5.2-codex", "gpt-5.1-codex", "gpt-5-codex", "codex-mini-latest"}
 
 SLIDING_WINDOW_SIZE = 3
 

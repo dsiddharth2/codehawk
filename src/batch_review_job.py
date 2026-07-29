@@ -198,7 +198,7 @@ class BatchReviewJob:
             logger.warning("PR pre-fetch failed: %s", exc)
             return None
 
-    _VERIFY_MODEL = "gpt-5-codex"
+    _VERIFY_MODEL = "gpt-5.3-codex"
 
     def _run_verify_only(
         self,

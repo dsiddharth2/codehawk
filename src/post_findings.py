@@ -40,7 +40,9 @@ CODEREVIEW_YML = ".codereview.yml"
 # Cost per 1M tokens: (input, output) in USD.
 # Sorted longest-prefix-first so "gpt-4.1-mini" matches before "gpt-4.1".
 MODEL_COST_TABLE: Dict[str, Tuple[float, float]] = {
-    "gpt-5-codex":           (2.00, 8.00),
+    "gpt-5.3-codex":         (2.00, 8.00),
+    "gpt-5.2-codex":         (2.00, 8.00),
+    "gpt-5.1-codex":         (2.00, 8.00),
     "gpt-4.1-mini":          (0.40, 1.60),
     "gpt-4.1-nano":          (0.10, 0.40),
     "gpt-4.1":               (2.00, 8.00),
